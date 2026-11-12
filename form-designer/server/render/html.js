@@ -1,6 +1,6 @@
 // Template + data -> printable HTML document (one .fd-page per template page;
 // the paginator adds continuation pages for long tables / rich text).
-import { elementHtml, BASE_CSS, PAGE_SIZES, escapeHtml } from '../../shared/elements.js';
+import { elementHtml, BASE_CSS, PAGE_SIZES, escapeHtml, bandElements } from '../../shared/elements.js';
 import { scopeFor } from '../../shared/expr.js';
 import { barcodeSvg } from '../barcode.js';
 import { fontsCssForTemplate } from '../fonts.js';
@@ -21,6 +21,7 @@ export function buildDocumentHtml(template, data, { fontsCss } = {}) {
   const errors = [];
   const ctx = { design: false, errors, barcode: barcodeSvg };
   const scope = scopeFor(data);
+  const bands = bandElements(template, height);
   const pages = (template.pages || []).map((pg, i) => {
     const bg = pg.background || null;
     const pdfBg = bg && bg.type === 'pdf' && template.sourcePdf;
@@ -28,7 +29,13 @@ export function buildDocumentHtml(template, data, { fontsCss } = {}) {
     if (bg && bg.type === 'image' && bg.src) {
       bgHtml = `<img class="fd-bg" src="${escapeHtml(bg.src)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:fill" alt="">`;
     }
-    const els = (pg.elements || []).map((el) => elementHtml(el, scope, ctx)).join('');
+    let els = (pg.elements || []).map((el) => elementHtml(el, scope, ctx)).join('');
+    if (!pg.noBands) {
+      els += bands.map((b) => {
+        const h = elementHtml(b.el, scope, ctx);
+        return h ? h.replace('<div ', `<div data-band="${b.band}" data-doc-show="${b.docShow}" `) : '';
+      }).join('');
+    }
     const style = `width:${width}mm;height:${height}mm;${pdfBg ? 'background:transparent' : `background:${pg.color || '#fff'}`}`;
     return `<section class="fd-page" data-tpl-page="${i}" style="${style}">${bgHtml}${els}</section>`;
   });

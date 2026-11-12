@@ -102,10 +102,34 @@ export function paginate() {
     });
   }
 
-  const all = Array.from(document.querySelectorAll('.fd-page'));
+  let all = Array.from(document.querySelectorAll('.fd-page'));
+  // header / footer rules relative to the whole document
+  all.forEach((pg, i) => {
+    const first = i === 0;
+    const last = i === all.length - 1;
+    pg.querySelectorAll('[data-doc-show]').forEach((el) => {
+      const r = el.getAttribute('data-doc-show');
+      const keep = r === 'notFirst' ? !first : r === 'firstOnly' ? first : r === 'notLast' ? !last : r === 'lastOnly' ? last : true;
+      if (!keep) el.remove();
+    });
+  });
+  all = Array.from(document.querySelectorAll('.fd-page'));
   all.forEach((pg, i) => {
     pg.querySelectorAll('.fd-pn').forEach((e) => { e.textContent = String(i + 1); });
     pg.querySelectorAll('.fd-pc').forEach((e) => { e.textContent = String(all.length); });
   });
-  return all.map((pg) => Number(pg.getAttribute('data-tpl-page')));
+  const placeholders = [];
+  all.forEach((pg, i) => {
+    pg.querySelectorAll('[data-ph]').forEach((el) => {
+      placeholders.push({
+        name: el.getAttribute('data-ph'),
+        type: el.getAttribute('data-ph-type'),
+        label: el.getAttribute('data-ph-label') || '',
+        required: el.hasAttribute('data-ph-required'),
+        page: i + 1,
+        x: parseFloat(el.style.left), y: parseFloat(el.style.top), width: parseFloat(el.style.width), height: parseFloat(el.style.height),
+      });
+    });
+  });
+  return { map: all.map((pg) => Number(pg.getAttribute('data-tpl-page'))), placeholders };
 }

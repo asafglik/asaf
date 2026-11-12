@@ -1,5 +1,5 @@
 // Default element definitions for the toolbox.
-import { uid } from './state.js';
+import { uid, uniquePlaceholder } from './state.js';
 
 export const TOOLS = [
   { type: 'text', label: 'טקסט קבוע', icon: 'T', hint: 'טקסט רגיל, אפשר לשלב שדות {{...}}' },
@@ -10,6 +10,8 @@ export const TOOLS = [
   { type: 'image', label: 'תמונה', icon: '🖼', hint: 'תמונה קבועה או מהנתונים' },
   { type: 'barcode', label: 'ברקוד', icon: '|||', hint: 'Code128, EAN, ITF...', symbology: 'code128' },
   { type: 'barcode', label: 'QR', icon: '▣', hint: 'QR, DataMatrix, PDF417', symbology: 'qrcode', key: 'qr' },
+  { type: 'signature', label: 'אזור חתימה', icon: '✍', hint: 'מקום לחתימה – מיקומו מוחזר ב-API' },
+  { type: 'upload', label: 'אזור תמונה', icon: '⬚', hint: 'מקום להעלאת תמונה – מיקומו מוחזר ב-API' },
   { type: 'checkbox', label: 'תיבת סימון', icon: '☑', hint: 'מסומנת לפי ערך' },
   { type: 'line', label: 'קו', icon: '—', hint: 'קו אופקי או אנכי' },
   { type: 'rect', label: 'מלבן', icon: '▭', hint: 'מסגרת / רקע' },
@@ -18,7 +20,7 @@ export const TOOLS = [
 
 export const TYPE_LABELS = {
   text: 'טקסט קבוע', field: 'שדה נתונים', computed: 'שדה מחושב', richtext: 'טקסט מעוצב', table: 'טבלה',
-  image: 'תמונה', barcode: 'ברקוד', checkbox: 'תיבת סימון', line: 'קו', rect: 'מלבן', ellipse: 'אליפסה',
+  image: 'תמונה', barcode: 'ברקוד', checkbox: 'תיבת סימון', signature: 'אזור חתימה', upload: 'אזור העלאת תמונה', line: 'קו', rect: 'מלבן', ellipse: 'אליפסה',
 };
 
 const baseStyle = () => ({ fontFamily: 'Heebo', fontSize: 11, color: '#000000', align: 'right', valign: 'top', direction: 'rtl' });
@@ -70,6 +72,12 @@ export function createElement(type, opts = {}) {
       });
       break;
     }
+    case 'signature':
+      Object.assign(e, { w: 55, h: 18, placeholder: opts.placeholder || uniquePlaceholder('signature'), label: opts.label ?? 'חתימה', signer: '', required: true, binding: '', style: { fontSize: 8, color: '#4b5563', padding: 0 } });
+      break;
+    case 'upload':
+      Object.assign(e, { w: 40, h: 40, placeholder: opts.placeholder || uniquePlaceholder('upload'), label: opts.label ?? 'העלאת תמונה', required: false, binding: '', fit: 'contain', style: { fontSize: 8, color: '#6b7280', padding: 0 } });
+      break;
     case 'checkbox':
       Object.assign(e, { w: 5, h: 5, binding: opts.binding || '', style: { borderWidth: 0.75, borderColor: '#000000' } });
       break;

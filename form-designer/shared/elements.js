@@ -334,6 +334,24 @@ export function elementInnerHtml(el, scope, ctx) {
     case 'rect':
     case 'ellipse':
       return '';
+    case 'signature':
+    case 'upload': {
+      const v = el.binding ? safeEval(el.binding, scope, ctx) : '';
+      const src = imageSrc(v);
+      if (src) return imageHtml(src, el.fit || 'contain');
+      if (el.printFrame === false && !ctx.design) return '';
+      const label = escapeHtml(el.label ?? (el.type === 'signature' ? 'חתימה' : 'העלאת תמונה'));
+      const color = st.color || '#5b6575';
+      const fs = n(st.fontSize, 8);
+      if (el.type === 'signature') {
+        return `<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 1mm 0.5mm">`
+          + `<div style="width:100%;border-top:0.75pt solid ${color}"></div>`
+          + `<div style="font-size:${fs}pt;color:${color};line-height:1.3;white-space:nowrap">${label}</div></div>`
+          + (ctx.design ? `<span class="fd-ph-name">✍ ${escapeHtml(el.placeholder || '')}</span>` : '');
+      }
+      return `<div style="position:absolute;inset:0;border:0.75pt dashed ${color};display:flex;align-items:center;justify-content:center;text-align:center;font-size:${fs}pt;color:${color}">${label}</div>`
+        + (ctx.design ? `<span class="fd-ph-name">🖼 ${escapeHtml(el.placeholder || '')}</span>` : '');
+    }
     case 'checkbox': {
       const v = el.binding ? safeEval(el.binding, scope, ctx) : el.expression ? safeEval(el.expression, scope, ctx) : false;
       const on = v === true || v === 'true' || v === '1' || v === 1 || v === 'Y' || v === 'y' || v === 'כן' || v === 'X' || v === 'x';
@@ -382,6 +400,11 @@ export function elementHtml(el, scope, ctx) {
   if (!isVisible(el, scope, ctx)) return '';
   const attrs = [`class="fd-el fd-${el.type}"`, `data-id="${escapeHtml(el.id)}"`, `style="${escapeHtml(elementOuterCss(el))}"`];
   if (el.showOn && el.showOn !== 'all') attrs.push(`data-show-on="${escapeHtml(el.showOn)}"`);
+  if (el.type === 'signature' || el.type === 'upload') {
+    attrs.push(`data-ph="${escapeHtml(el.placeholder || el.id)}"`, `data-ph-type="${el.type}"`);
+    if (el.label) attrs.push(`data-ph-label="${escapeHtml(el.label)}"`);
+    if (el.required) attrs.push('data-ph-required="1"');
+  }
   if (el.type === 'table' || el.type === 'richtext') {
     if (el.overflow === 'paginate') {
       attrs.push('data-flow="1"');
@@ -406,5 +429,55 @@ export const BASE_CSS = `
 .fd-richtext ul,.fd-richtext ol{margin:0 0 .35em;padding-inline-start:1.4em}
 .fd-tbl tr{break-inside:avoid}
 .fd-ph{color:#7a869a;font-style:italic}
+.fd-ph-name{position:absolute;top:0.3mm;inset-inline-start:0.6mm;font:600 6.5pt sans-serif;color:#2563eb;background:rgba(255,255,255,.85);padding:0 0.6mm;border-radius:0.6mm;direction:ltr}
 .fd-barcode svg{width:100%;height:100%;display:block}
 `;
+
+// ---------------------------------------------------------------- header / footer
+// template.header / template.footer = { enabled, height, showOn, elements }
+// Element coordinates are relative to the band; the footer band sits at the
+// bottom of the page. showOn: all | notFirst | firstOnly | notLast | lastOnly
+export function bandElements(template, pageHeight) {
+  const out = [];
+  for (const band of ['header', 'footer']) {
+    const b = template[band];
+    if (!b || b.enabled === false || !Array.isArray(b.elements)) continue;
+    const top = band === 'header' ? 0 : pageHeight - n(b.height, 20);
+    for (const el of b.elements) out.push({ el: { ...el, y: n(el.y) + top }, band, docShow: b.showOn || 'all' });
+  }
+  return out;
+}
+
+/** Signature / upload placeholders declared in a template (design-time positions). */
+export function templatePlaceholders(template, pageWidth, pageHeight) {
+  const PT = 72 / 25.4;
+  const list = [];
+  const add = (el, page, yOffset = 0, band = null) => {
+    if (el.type !== 'signature' && el.type !== 'upload') return;
+    const x = n(el.x);
+    const y = n(el.y) + yOffset;
+    const w = n(el.w);
+    const h = n(el.h);
+    list.push({
+      name: el.placeholder || el.id,
+      type: el.type,
+      label: el.label || '',
+      required: !!el.required,
+      signer: el.signer || '',
+      page,
+      band,
+      showOn: el.showOn || 'all',
+      condition: el.visibleIf || '',
+      mm: { x, y, width: w, height: h },
+      pdf: { x: +(x * PT).toFixed(2), y: +((pageHeight - y - h) * PT).toFixed(2), width: +(w * PT).toFixed(2), height: +(h * PT).toFixed(2) },
+    });
+  };
+  (template.pages || []).forEach((p, i) => (p.elements || []).forEach((el) => add(el, i + 1)));
+  for (const band of ['header', 'footer']) {
+    const b = template[band];
+    if (!b || b.enabled === false) continue;
+    const top = band === 'header' ? 0 : pageHeight - n(b.height, 20);
+    (b.elements || []).forEach((el) => add(el, 'all', top, band));
+  }
+  return list;
+}

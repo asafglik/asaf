@@ -3,3 +3,4 @@ storage/templates/.history/
 storage/fonts/
 config.json
 *.tmp
+storage/customers.json

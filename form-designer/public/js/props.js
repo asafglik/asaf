@@ -1,5 +1,5 @@
 // Properties panel for the selected element(s), or the page when nothing is selected.
-import { state, on, change, selectedElements, currentPage, uid, emit, pageSizeMm } from './state.js';
+import { state, on, change, selectedElements, currentPage, uid, emit, pageSizeMm, allContainers } from './state.js';
 import { escapeHtml, PAGE_SIZES } from '/shared/elements.js';
 import { FORMAT_PRESETS } from '/shared/format.js';
 import { validateExpr, tryEval, FUNCTION_HELP } from '/shared/expr.js';
@@ -127,11 +127,75 @@ const boxGroup = group('מסגרת ורקע', [
   fields.num('עיגול פינות', 'style.radius', { step: 0.5, min: 0, suffix: 'מ"מ' }),
 ], false);
 
-const behavior = group('התנהגות', [
+// ---- show / hide conditions: a rule builder that writes the visibleIf expression
+const COND_OPS = [
+  ['==', 'שווה ל'], ['!=', 'שונה מ'], ['>', 'גדול מ'], ['<', 'קטן מ'], ['>=', 'גדול או שווה'], ['<=', 'קטן או שווה'],
+  ['contains', 'מכיל'], ['empty', 'ריק'], ['notEmpty', 'לא ריק'], ['true', 'מסומן / true'], ['false', 'לא מסומן / false'],
+];
+const NO_VALUE = new Set(['empty', 'notEmpty', 'true', 'false']);
+
+export function conditionToExpr(cond) {
+  const rules = (cond?.rules || []).filter((r) => r.path);
+  const q = (v) => (/^-?\d+(\.\d+)?$/.test(String(v ?? '').trim()) ? String(v).trim() : `"${String(v ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+  const parts = rules.map((r) => {
+    switch (r.op) {
+      case 'empty': return `isEmpty(${r.path})`;
+      case 'notEmpty': return `!isEmpty(${r.path})`;
+      case 'true': return `${r.path} == true`;
+      case 'false': return `${r.path} != true`;
+      case 'contains': return `contains(${r.path}, ${q(r.value)})`;
+      default: return `${r.path} ${r.op || '=='} ${q(r.value)}`;
+    }
+  });
+  if (parts.length > 1) return parts.map((p) => `(${p})`).join(cond.join === 'or' ? ' or ' : ' and ');
+  return parts[0] || '';
+}
+
+function conditionEditor(els) {
+  const el = els[0];
+  const cond = el.condition;
+  const manual = el.visibleIf && !cond;
+  let h = '<div class="cond">';
+  if (manual) {
+    h += '<p class="hint">התנאי נכתב כביטוי ידני. אפשר לערוך אותו למטה, או <button class="link" data-cond-reset type="button">להתחיל בונה תנאים חדש</button>.</p>';
+  } else {
+    const rules = cond?.rules?.length ? cond.rules : [];
+    if (rules.length > 1) {
+      h += `<div class="f"><span>התנאים</span><div class="seg"><button class="${cond.join !== 'or' ? 'on' : ''}" data-cjoin="and" type="button">כולם (וגם)</button><button class="${cond.join === 'or' ? 'on' : ''}" data-cjoin="or" type="button">אחד מהם (או)</button></div></div>`;
+    }
+    rules.forEach((r, i) => {
+      h += `<div class="cond-row">
+        <input type="text" list="dl-paths" dir="ltr" placeholder="שדה" data-crule="${i}.path" value="${escapeHtml(r.path || '')}">
+        <select data-crule="${i}.op">${COND_OPS.map(([v, l]) => opt(v, l, r.op || '==')).join('')}</select>
+        ${NO_VALUE.has(r.op) ? '<span></span>' : `<input type="text" placeholder="ערך" data-crule="${i}.value" value="${escapeHtml(r.value ?? '')}">`}
+        <button class="mini danger" data-cdel="${i}" type="button" title="הסרת תנאי">✕</button></div>`;
+    });
+    h += `<button class="btn btn-block" data-cadd type="button">+ ${rules.length ? 'תנאי נוסף' : 'הוספת תנאי הצגה'}</button>`;
+    if (!rules.length) h += '<p class="hint">בלי תנאי – הרכיב מוצג תמיד.</p>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function setCondition(mutate) {
+  const els = selectedElements();
+  change(() => els.forEach((e) => {
+    const c = e.condition ? JSON.parse(JSON.stringify(e.condition)) : { join: 'and', rules: [] };
+    mutate(c);
+    if (!c.rules.length) { delete e.condition; delete e.visibleIf; return; }
+    e.condition = c;
+    e.visibleIf = conditionToExpr(c);
+  }), 'props-edit');
+  rerenderSoon();
+}
+
+const behavior = (els) => group('הצגה והסתרה', [
   fields.select('הצג ב', 'showOn', SHOW_ON, 'all'),
-  fields.expr('הצג רק אם (תנאי)', 'visibleIf', { placeholder: 'customer.vip == true' }),
-  fields.html('<p class="hint">"עמוד ראשון/אחרון" מתייחס לעמודים שנוצרים כשטבלה או טקסט ארוך גולשים לעמודים נוספים.</p>'),
-], false);
+  fields.html('<div class="f f-col"><span>הצג רק כאשר</span></div>'),
+  conditionEditor,
+  (e2) => `<details class="adv"${e2[0].visibleIf && !e2[0].condition ? ' open' : ''}><summary>ביטוי מתקדם</summary>${fields.expr('ביטוי', 'visibleIf', { placeholder: 'customer.vip == true and total > 1000' })(e2)}</details>`,
+  fields.html('<p class="hint">"עמוד ראשון/אחרון" מתייחס לעמודים שנוצרים כשטבלה או טקסט ארוך גולשים לעמודים נוספים. רכיב שמוסתר לפי נתוני הדוגמה מסומן בפסים.</p>'),
+], true)(els);
 
 const nameField = fields.text('שם הרכיב', 'name', { placeholder: 'לזיהוי בלבד' });
 
@@ -210,6 +274,26 @@ const CONTENT = {
   ]),
 };
 CONTENT.ellipse = CONTENT.rect;
+const placeholderGroup = (kind) => group(kind === 'signature' ? 'אזור חתימה' : 'אזור העלאת תמונה', [
+  (els) => {
+    const v = val(els, 'placeholder');
+    const dup = v && allContainers().some((c) => (c.elements || []).some((e) => e.placeholder === v && !els.includes(e)));
+    return `<label class="f"><span>שם (placeholder)</span><input type="text" data-key="placeholder" value="${escapeHtml(v)}" dir="ltr" placeholder="${kind}_1"></label>${dup ? '<div class="expr-err">השם כבר בשימוש ברכיב אחר</div>' : ''}`;
+  },
+  fields.text('תווית', 'label', { placeholder: kind === 'signature' ? 'חתימת הלקוח' : 'צילום תעודת זהות' }),
+  ...(kind === 'signature' ? [fields.text('חותם', 'signer', { placeholder: 'לקוח / נציג / ערב' })] : []),
+  fields.check('חובה', 'required'),
+  fields.check('הדפס מסגרת ותווית ב-PDF', 'printFrame', true),
+  fields.text('תמונה מהנתונים (אם קיימת)', 'binding', { list: 'dl-paths', placeholder: 'customer.signature' }),
+  fields.select('התאמת תמונה', 'fit', [['contain', 'התאם (שמור יחס)'], ['cover', 'מלא וחתוך'], ['fill', 'מתח']], 'contain'),
+  fields.html('<div class="f-grid">'),
+  fields.num('גודל תווית', 'style.fontSize', { step: 0.5, min: 5, suffix: 'pt', dflt: 8 }),
+  fields.color('צבע', 'style.color', { allowEmpty: false }),
+  fields.html('</div>'),
+  fields.html('<p class="hint">שם ה-placeholder, המיקום (X, Y) והגודל מוחזרים ב-API של התבנית ובתשובת ההפקה (<code dir="ltr">output=json</code>), במ"מ ובנקודות PDF.</p>'),
+]);
+CONTENT.signature = placeholderGroup('signature');
+CONTENT.upload = placeholderGroup('upload');
 
 // ---------------------------------------------------------------- table
 function tableGroups(el) {
@@ -285,6 +369,20 @@ function colField(label, i, key, v, { type = 'text', list = '', placeholder = ''
 }
 
 // ---------------------------------------------------------------- page panel
+function bandPanel() {
+  const b = currentPage();
+  const name = state.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה';
+  return `
+  <div class="props-title"><strong>${name}</strong><button class="mini" data-action="band-exit" title="חזרה לעמוד">✕</button></div>
+  <details class="pg" open><summary>הגדרות</summary><div class="pg-body">
+    <label class="f f-check"><input type="checkbox" data-bkey="enabled" data-type="bool"${b.enabled !== false ? ' checked' : ''}><span>פעילה</span></label>
+    <label class="f"><span>גובה</span><span class="f-num"><input type="number" step="1" min="5" data-bkey="height" data-type="num" value="${b.height}"><em>מ"מ</em></span></label>
+    <label class="f"><span>הצג ב</span><select data-bkey="showOn">${[['all', 'כל העמודים'], ['notFirst', 'כל העמודים מלבד הראשון'], ['firstOnly', 'עמוד ראשון בלבד'], ['notLast', 'כל העמודים מלבד האחרון'], ['lastOnly', 'עמוד אחרון בלבד']].map(([v, l]) => opt(v, l, b.showOn || 'all')).join('')}</select></label>
+    <p class="hint">הרכיבים כאן מודפסים בכל עמוד במסמך, כולל עמודי המשך של טבלאות. אפשר להשתמש ב-<code dir="ltr">{{page}}</code> ו-<code dir="ltr">{{pages}}</code>. דאגו שתוכן העמודים לא יחפוף לאזור הכותרת.</p>
+    <button class="btn btn-block" data-action="band-exit">חזרה לעריכת העמוד</button>
+  </div></details>`;
+}
+
 function pagePanel() {
   const t = state.template;
   const page = currentPage();
@@ -320,7 +418,7 @@ export function renderProps() {
   if (!state.template) return;
   const els = selectedElements();
   if (!els.length) {
-    panel.innerHTML = pagePanel();
+    panel.innerHTML = state.band ? bandPanel() : pagePanel();
     return;
   }
   const types = new Set(els.map((e) => e.type));
@@ -345,7 +443,7 @@ export function renderProps() {
     if (type === 'table') parts.push(...tableGroups(els[0]));
     else if (CONTENT[type]) parts.push(CONTENT[type]);
     if (['text', 'field', 'computed', 'richtext'].includes(type)) parts.push(fontGroup(type !== 'richtext'));
-    if (['text', 'field', 'computed', 'richtext', 'image', 'barcode'].includes(type)) parts.push(boxGroup);
+    if (['text', 'field', 'computed', 'richtext', 'image', 'barcode', 'signature', 'upload'].includes(type)) parts.push(boxGroup);
   }
   parts.push(geometry, behavior);
   html += parts.map((p) => p(els)).join('');
@@ -368,6 +466,12 @@ panel.addEventListener('change', (ev) => {
   const t = ev.target;
   if (t.dataset.key) {
     let v = parseInput(t);
+    if (t.dataset.key === 'visibleIf') {
+      const els = selectedElements();
+      change(() => els.forEach((e) => { delete e.condition; if (v) e.visibleIf = v; else delete e.visibleIf; }), 'props-edit');
+      rerenderSoon();
+      return;
+    }
     if (t.type === 'color') t.removeAttribute('data-empty');
     applyToSelected(t.dataset.key, v);
     rerenderSoon();
@@ -382,6 +486,14 @@ panel.addEventListener('change', (ev) => {
     change((tpl) => setPath(tpl, t.dataset.tkey, parseInput(t)), t.dataset.tkey.startsWith('page') ? 'all' : 'meta');
   } else if (t.dataset.pkey) {
     change(() => setPath(currentPage(), t.dataset.pkey, parseInput(t)), 'all');
+  } else if (t.dataset.bkey) {
+    change(() => setPath(currentPage(), t.dataset.bkey, parseInput(t)), 'all');
+  } else if (t.dataset.crule) {
+    const [i, key] = t.dataset.crule.split('.');
+    setCondition((c) => {
+      c.rules[+i][key] = t.value;
+      if (key === 'op' && NO_VALUE.has(t.value)) delete c.rules[+i].value;
+    });
   } else if (t.dataset.skey) {
     state[t.dataset.skey] = t.dataset.type === 'bool' ? t.checked : Number(t.value);
     emit('all');
@@ -440,6 +552,15 @@ panel.addEventListener('click', (ev) => {
     change((tpl) => setPath(tpl, b.dataset.tseg, b.dataset.val), 'all');
   } else if (b.dataset.clear) {
     applyToSelected(b.dataset.clear, '');
+    rerenderSoon();
+  } else if (b.hasAttribute('data-cadd')) {
+    setCondition((c) => c.rules.push({ path: '', op: '==', value: '' }));
+  } else if (b.dataset.cdel !== undefined) {
+    setCondition((c) => c.rules.splice(+b.dataset.cdel, 1));
+  } else if (b.dataset.cjoin) {
+    setCondition((c) => { c.join = b.dataset.cjoin; });
+  } else if (b.hasAttribute('data-cond-reset')) {
+    change(() => els.forEach((e) => { delete e.visibleIf; e.condition = { join: 'and', rules: [{ path: '', op: '==', value: '' }] }; }), 'props-edit');
     rerenderSoon();
   } else if (b.dataset.align) {
     alignSelected(b.dataset.align);

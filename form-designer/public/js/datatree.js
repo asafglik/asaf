@@ -72,11 +72,11 @@ export function renderTree() {
     panel.innerHTML = '<div class="empty-hint">עדיין לא הוגדר עולם נתונים.<br><button class="btn btn-primary" data-action="data">טעינת XML / JSON</button></div>';
     return;
   }
-  const index = (n, inArr) => {
-    nodeIndex.set(n.path + (inArr ? '#rel' : ''), { ...n, rel: inArr });
-    for (const c of n.children || []) index(c, inArr || n.kind === 'array');
+  const index = (n, arrayPath) => {
+    nodeIndex.set(n.path + (arrayPath !== null ? '#rel' : ''), { ...n, rel: arrayPath !== null, arrayPath });
+    for (const c of n.children || []) index(c, n.kind === 'array' ? n.path : arrayPath);
   };
-  index(state.tree, false);
+  index(state.tree, null);
   const fmt = state.template?.schema?.format?.toUpperCase() || '';
   panel.innerHTML = `<div class="dt-head">${fmt ? `<span class="badge">${fmt}</span>` : ''}<button class="link" data-action="data">שינוי</button></div><ul class="dt-root">${(state.tree.children || []).map((c) => nodeHtml(c, 0, false)).join('')}</ul>`;
   applyFilter();
@@ -100,7 +100,7 @@ panel.addEventListener('dragstart', (ev) => {
   if (!li) return;
   const n = nodeOf(li);
   if (!n) return;
-  const payload = { path: n.path, name: n.name, kind: n.kind, children: (n.children || []).map((c) => ({ name: c.name, path: c.path, kind: c.kind })) };
+  const payload = { path: n.path, name: n.name, kind: n.kind, rel: n.rel, arrayPath: n.arrayPath, children: (n.children || []).map((c) => ({ name: c.name, path: c.path, kind: c.kind })) };
   ev.dataTransfer.setData('application/x-fd-node', JSON.stringify(payload));
   ev.dataTransfer.setData('text/plain', `{{${n.path}}}`);
   ev.dataTransfer.effectAllowed = 'copy';
@@ -122,11 +122,24 @@ panel.addEventListener('click', (ev) => {
   change(() => {
     if (el.type === 'field' || el.type === 'checkbox') el.binding = n.path;
     else if (el.type === 'image') { el.source = 'field'; el.binding = n.path; }
+    else if (el.type === 'signature' || el.type === 'upload') el.binding = n.path;
+    else if (el.type === 'table' && n.rel) el.columns.push({ id: 'c' + Math.random().toString(36).slice(2, 8), header: n.name.replace(/^@/, ''), binding: n.path, width: 1 });
     else if (el.type === 'barcode') { el.valueMode = 'field'; el.binding = n.path; }
     else if (el.type === 'table' && n.kind === 'array') el.binding = n.path;
     else if (el.type === 'text') el.text = (el.text || '') + `{{${n.path}}}`;
     else if (el.type === 'computed') el.expression = (el.expression || '') + n.path;
   });
+});
+
+// double click a field: add it to the page
+panel.addEventListener('dblclick', (ev) => {
+  const row = ev.target.closest('.dt-row');
+  if (!row) return;
+  const n = nodeOf(row.closest('.dt-node'));
+  if (!n) return;
+  const node = { ...n, children: n.children };
+  if (n.rel && n.kind !== 'array') node.path = `${n.arrayPath}[0].${n.path}`;
+  import('./canvas.js').then(({ addElement }) => import('./factory.js').then(({ elementFromNode }) => addElement(elementFromNode(node))));
 });
 
 on((w) => { if (w === 'data' || w === 'load') renderTree(); });

@@ -1,7 +1,7 @@
 // The design surface: renders the current page with the same element HTML
 // the server prints, and handles selection, moving, resizing and dropping.
-import { state, on, change, select, currentPage, selectedElements, pageSizeMm, findElement, emit } from './state.js';
-import { elementInnerHtml, elementOuterCss, BASE_CSS, MM, escapeHtml } from '/shared/elements.js';
+import { state, on, change, select, currentPage, selectedElements, pageSizeMm, canvasSizeMm, findElement, emit, uid } from './state.js';
+import { elementInnerHtml, elementOuterCss, BASE_CSS, MM, escapeHtml, bandElements, isVisible } from '/shared/elements.js';
 import { scopeFor } from '/shared/expr.js';
 import { createElement, elementFromNode } from './factory.js';
 import { keyQuery } from './api.js';
@@ -37,6 +37,10 @@ function elementNode(el, scope, ctx) {
   d.className = `fd-el fd-${el.type}` + (el.locked ? ' is-locked' : '') + (el.visibleIf ? ' has-cond' : '') + (el.showOn && el.showOn !== 'all' ? ' has-showon' : '');
   d.dataset.id = el.id;
   d.style.cssText = elementOuterCss(el);
+  if (el.visibleIf && state.showData && !isVisible(el, scope, { ...ctx, design: false, errors: null })) {
+    d.classList.add('is-cond-hidden');
+    d.title = 'מוסתר לפי התנאי עם נתוני הדוגמה';
+  }
   let inner;
   try {
     inner = elementInnerHtml(el, scope, ctx);
@@ -50,7 +54,7 @@ function elementNode(el, scope, ctx) {
 
 export function render() {
   if (!state.template) return;
-  const { w, h } = pageSizeMm();
+  const { w, h } = canvasSizeMm();
   const page = currentPage();
   const z = state.zoom;
   scroll.innerHTML = '';
@@ -59,7 +63,7 @@ export function render() {
   wrap.style.width = `${w * MM * z}px`;
   wrap.style.height = `${h * MM * z}px`;
   pageEl = document.createElement('div');
-  pageEl.className = 'fd-page design-page' + (state.showGrid ? ' show-grid' : '');
+  pageEl.className = 'fd-page design-page' + (state.showGrid ? ' show-grid' : '') + (state.band ? ' band-page' : '');
   pageEl.style.cssText = `width:${w}mm;height:${h}mm;transform:scale(${z});background-color:${page.color || '#fff'}`;
   if (state.showGrid) pageEl.style.backgroundSize = `${10 * MM}px ${10 * MM}px, ${10 * MM}px ${10 * MM}px`;
 
@@ -79,6 +83,32 @@ export function render() {
 
   const scope = designScope();
   const ctx = designCtx();
+  // header / footer of the template, shown faded on every page
+  if (!state.band) {
+    const t = state.template;
+    for (const band of ['header', 'footer']) {
+      const b = t[band];
+      if (!b || b.enabled === false) continue;
+      const g = document.createElement('div');
+      g.className = `band-guide band-${band}`;
+      g.style.cssText = band === 'header' ? `top:0;height:${b.height}mm` : `bottom:0;height:${b.height}mm`;
+      g.innerHTML = `<span>${band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה'}</span>`;
+      g.dataset.band = band;
+      g.title = 'לחיצה כפולה לעריכת ' + (band === 'header' ? 'הכותרת העליונה' : 'הכותרת התחתונה');
+      pageEl.appendChild(g);
+    }
+    for (const b of bandElements(t, h)) {
+      const node = elementNode(b.el, scope, ctx);
+      node.classList.add('band-ghost');
+      node.removeAttribute('data-id');
+      pageEl.appendChild(node);
+    }
+  } else {
+    const lab = document.createElement('div');
+    lab.className = 'band-label';
+    lab.textContent = state.band === 'header' ? 'עריכת כותרת עליונה – מופיעה בכל עמוד' : 'עריכת כותרת תחתונה – מופיעה בכל עמוד';
+    wrap.appendChild(lab);
+  }
   for (const el of page.elements) pageEl.appendChild(elementNode(el, scope, ctx));
   selLayer = document.createElement('div');
   selLayer.className = 'sel-layer';
@@ -139,7 +169,7 @@ scroll.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0 || !pageEl || isRichEditing()) return;
   if (ev.target.closest('.inline-editor')) return;
   const handle = ev.target.closest('.handle');
-  const elNode = ev.target.closest('.fd-el');
+  const elNode = ev.target.closest('.fd-el[data-id]');
   const start = toMm(ev.clientX, ev.clientY);
 
   if (handle) {
@@ -233,7 +263,13 @@ scroll.addEventListener('pointercancel', endDrag);
 scroll.addEventListener('dblclick', (ev) => {
   // pointer capture retargets the event to the scroller, so hit-test again
   const hit = document.elementFromPoint(ev.clientX, ev.clientY);
-  const node = hit && hit.closest('.design-page .fd-el');
+  const node = hit && hit.closest('.design-page .fd-el[data-id]');
+  if (!node) {
+    const ghost = hit && (hit.closest('.band-ghost') || hit.closest('.band-guide'));
+    const band = ghost && (ghost.dataset.band || (ghost.getBoundingClientRect().top - pageEl.getBoundingClientRect().top < 40 * state.zoom ? 'header' : 'footer'));
+    if (band) emit('open-band:' + band);
+    return;
+  }
   if (!node) return;
   const el = findElement(node.dataset.id);
   if (!el || el.locked) return;
@@ -280,6 +316,7 @@ scroll.addEventListener('dragover', (ev) => {
 scroll.addEventListener('drop', (ev) => {
   ev.preventDefault();
   const p = pageEl ? toMm(ev.clientX, ev.clientY) : { x: 20, y: 20 };
+  clearDropTarget();
   let el = null;
   const tool = ev.dataTransfer.getData('application/x-fd-tool');
   const node = ev.dataTransfer.getData('application/x-fd-node');
@@ -287,14 +324,67 @@ scroll.addEventListener('drop', (ev) => {
     const t = JSON.parse(tool);
     el = createElement(t.type, t);
   } else if (node) {
-    el = elementFromNode(JSON.parse(node));
+    const n = JSON.parse(node);
+    const target = dropTargetAt(ev.clientX, ev.clientY);
+    if (target && dropOnElement(target, n)) return;
+    el = elementFromNode(n);
   }
   if (!el) return;
   addElement(el, p);
 });
 
+// ---- dropping a data field onto an existing element binds it
+function dropTargetAt(x, y) {
+  const hit = document.elementFromPoint(x, y);
+  const node = hit && hit.closest('.design-page .fd-el[data-id]');
+  return node ? findElement(node.dataset.id) : null;
+}
+
+function dropOnElement(el, n) {
+  if (el.locked) return false;
+  const path = n.path;
+  if (el.type === 'table') {
+    if (n.kind === 'array') { change(() => { el.binding = path; }); return true; }
+    // row fields are relative to the row; root fields still resolve inside a row
+    change(() => el.columns.push({ id: uid('c'), header: n.name.replace(/^@/, ''), binding: path, width: 1 }));
+    select(el.id);
+    return true;
+  }
+  if (n.kind === 'array') return false;
+  const full = n.rel && n.arrayPath ? `${n.arrayPath}[0].${path}` : path;
+  change(() => {
+    if (el.type === 'text') el.text = (el.text || '') + `{{${full}}}`;
+    else if (el.type === 'richtext') el.html = (el.html || '').replace(/(<\/p>)?\s*$/, ` {{${full}}}$1`);
+    else if (el.type === 'computed') el.expression = (el.expression || '') + full;
+    else if (el.type === 'image' || el.type === 'signature' || el.type === 'upload') { el.binding = full; if (el.type === 'image') el.source = 'field'; }
+    else if (el.type === 'barcode') { el.valueMode = 'field'; el.binding = full; }
+    else el.binding = full;
+  });
+  select(el.id);
+  return true;
+}
+
+let dropHi = null;
+function clearDropTarget() {
+  if (dropHi) dropHi.classList.remove('drop-target');
+  dropHi = null;
+}
+scroll.addEventListener('dragover', (ev) => {
+  if (![...ev.dataTransfer.types].includes('application/x-fd-node')) return;
+  const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+  const node = hit && hit.closest('.design-page .fd-el[data-id]');
+  if (node !== dropHi) {
+    clearDropTarget();
+    if (node && !['line', 'rect', 'ellipse'].includes(findElement(node.dataset.id)?.type)) {
+      node.classList.add('drop-target');
+      dropHi = node;
+    }
+  }
+});
+scroll.addEventListener('dragleave', (ev) => { if (!scroll.contains(ev.relatedTarget)) clearDropTarget(); });
+
 export function addElement(el, at) {
-  const { w, h } = pageSizeMm();
+  const { w, h } = canvasSizeMm();
   if (!at) {
     // centre of the visible area
     const r = scroll.getBoundingClientRect();
@@ -303,7 +393,7 @@ export function addElement(el, at) {
   }
   el.x = snap(Math.max(0, Math.min(at.x, w - el.w)));
   el.y = snap(Math.max(0, Math.min(at.y, h - Math.max(el.h, 1))));
-  change((t) => t.pages[state.pageIndex].elements.push(el));
+  change((t) => currentPage().elements.push(el));
   select(el.id);
 }
 

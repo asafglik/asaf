@@ -116,7 +116,7 @@ async function htmlToPdf(html, width, height) {
     await page.setViewport({ width: Math.ceil(width * 3.78) + 2, height: Math.ceil(height * 3.78) + 2 });
     await page.setContent(html, { waitUntil: 'load', timeout: 60000 });
     await page.evaluate(() => document.fonts.ready.then(() => true));
-    const map = await page.evaluate(paginate);
+    const { map, placeholders } = await page.evaluate(paginate);
     const pdf = await page.pdf({
       width: `${width}mm`,
       height: `${height}mm`,
@@ -126,7 +126,7 @@ async function htmlToPdf(html, width, height) {
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
       timeout: 120000,
     });
-    return { pdf: Buffer.from(pdf), map };
+    return { pdf: Buffer.from(pdf), map, placeholders };
   } finally {
     if (page) await page.close().catch(() => {});
     release();
@@ -171,7 +171,13 @@ export async function renderPdf(template, data, { format } = {}) {
     ? parseData(String(data), { format, arrays: template.schema?.arrays || [] })
     : data || {};
   const { html, errors, width, height } = buildDocumentHtml(template, obj);
-  const { pdf, map } = await htmlToPdf(html, width, height);
+  const { pdf, map, placeholders: phMm } = await htmlToPdf(html, width, height);
+  // positions in mm (top-left origin) and in PDF points (bottom-left origin)
+  const placeholders = phMm.map((p) => ({
+    name: p.name, type: p.type, label: p.label, required: p.required, page: p.page,
+    mm: { x: p.x, y: p.y, width: p.width, height: p.height },
+    pdf: { x: +(p.x * PT).toFixed(2), y: +((height - p.y - p.height) * PT).toFixed(2), width: +(p.width * PT).toFixed(2), height: +(p.height * PT).toFixed(2) },
+  }));
   let out = await mergeBackgrounds(template, pdf, map, width, height);
   if (out === pdf) {
     // set document metadata on the plain output as well
@@ -181,10 +187,36 @@ export async function renderPdf(template, data, { format } = {}) {
     doc.setProducer('Form Designer');
     out = Buffer.from(await doc.save());
   }
-  return { pdf: out, errors, pages: map.length };
+  return { pdf: out, errors, pages: map.length, placeholders };
 }
 
 export async function renderHtml(template, data, { format } = {}) {
   const obj = typeof data === 'string' ? parseData(data, { format, arrays: template.schema?.arrays || [] }) : data || {};
   return buildDocumentHtml(template, obj);
+}
+
+/** Screenshot of one designed page with data (for the design agent). JPEG data URL. */
+export async function renderPageImage(template, data, pageIndex = 0) {
+  const obj = typeof data === 'string' ? parseData(data, { arrays: template.schema?.arrays || [] }) : data || {};
+  const t = { ...template, pages: template.pages.map((p, i) => (i === pageIndex ? p : { ...p, elements: [] })) };
+  const { html, width, height } = buildDocumentHtml(t, obj);
+  await acquire();
+  let page;
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on('request', (req) => (req.url().startsWith('data:') || req.url() === 'about:blank' ? req.continue() : req.abort()));
+    await page.setViewport({ width: Math.ceil(width * 3.78), height: Math.ceil(height * 3.78), deviceScaleFactor: 1.5 });
+    await page.setContent(html, { waitUntil: 'load' });
+    await page.evaluate(() => document.fonts.ready.then(() => true));
+    const el = (await page.$$('.fd-page'))[pageIndex];
+    if (!el) return null;
+    await el.evaluate((n) => { n.style.background = '#fff'; });
+    const buf = await el.screenshot({ type: 'jpeg', quality: 80 });
+    return 'data:image/jpeg;base64,' + Buffer.from(buf).toString('base64');
+  } finally {
+    if (page) await page.close().catch(() => {});
+    release();
+  }
 }

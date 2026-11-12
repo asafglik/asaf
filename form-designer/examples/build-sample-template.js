@@ -40,17 +40,26 @@ const elements = [
   { id: id(), type: 'line', x: 12, y: 236, w: 70, h: 1, thickness: 0.75, color: '#1f3a68', showOn: 'last' },
   { id: id(), type: 'field', x: 90, y: 238, w: 108, h: 16, binding: 'notes', style: S({ fontSize: 9, color: '#444444', italic: true }), showOn: 'last' },
   { id: id(), type: 'barcode', x: 140, y: 262, w: 58, h: 16, symbology: 'code128', valueMode: 'field', binding: '@number', showText: true },
-  { id: id(), type: 'line', x: 12, y: 282, w: 186, h: 1, thickness: 0.5, color: '#999999' },
-  { id: id(), type: 'text', x: 12, y: 284, w: 186, h: 6, text: 'עמוד {{page}} מתוך {{pages}}', style: S({ align: 'center', fontSize: 8, color: '#666666' }) },
+  { id: id(), type: 'signature', name: 'חתימת הלקוח', x: 12, y: 262, w: 60, h: 16, placeholder: 'customer_signature', label: 'חתימת הלקוח', signer: 'לקוח', required: true, showOn: 'last', style: { fontSize: 8, color: '#4b5563', padding: 0 } },
 ];
+
+// footer band: printed at the bottom of every page (y is relative to the band)
+const footer = {
+  enabled: true, height: 15, showOn: 'all',
+  elements: [
+    { id: id(), type: 'line', x: 12, y: 2, w: 186, h: 1, thickness: 0.5, color: '#999999' },
+    { id: id(), type: 'text', x: 12, y: 4, w: 186, h: 6, text: 'עמוד {{page}} מתוך {{pages}}', style: S({ align: 'center', fontSize: 8, color: '#666666' }) },
+  ],
+};
 
 const template = {
   id: '1001',
   name: 'חשבונית מס - דוגמה',
-  description: 'תבנית לדוגמה: טבלת פריטים עם מעבר עמודים, שדות מחושבים, QR וברקוד',
+  description: 'תבנית לדוגמה: טבלת פריטים עם מעבר עמודים, שדות מחושבים, QR, ברקוד, כותרת תחתונה ואזור חתימה',
   version: 1,
   page: { size: 'A4', orientation: 'portrait' },
   schema: { format: 'xml', sample: xml, arrays },
+  footer,
   pages: [{ id: 'p1', elements }],
 };
 

@@ -7,6 +7,7 @@ export const state = {
   template: null,
   sourcePdf: null, // base64 of an imported PDF (kept out of the undo history)
   pageIndex: 0,
+  band: null, // null = a page, 'header' | 'footer' = editing that band
   selection: [],
   zoom: 1,
   grid: 1, // snap step in mm (0 = off)
@@ -75,17 +76,37 @@ export function resetHistory() {
 
 function fixSelection() {
   if (state.pageIndex >= state.template.pages.length) state.pageIndex = state.template.pages.length - 1;
+  if (state.band && !state.template[state.band]) state.band = null;
   const ids = new Set(currentPage().elements.map((e) => e.id));
   state.selection = state.selection.filter((id) => ids.has(id));
 }
 
+export function ensureBand(t, band) {
+  if (!t[band]) t[band] = { enabled: true, height: band === 'header' ? 25 : 18, showOn: 'all', elements: [] };
+  if (!Array.isArray(t[band].elements)) t[band].elements = [];
+  return t[band];
+}
+
+/** The element container being edited: a page, or the header / footer band. */
 export function currentPage() {
+  if (state.band) return ensureBand(state.template, state.band);
   return state.template.pages[state.pageIndex];
 }
 
+/** Size of the design surface: the page, or just the band being edited. */
+export function canvasSizeMm() {
+  const { w, h } = pageSizeMm();
+  if (state.band) return { w, h: Number(currentPage().height) || 20 };
+  return { w, h };
+}
+
+export function allContainers(t = state.template) {
+  return [...t.pages, ...(t.header ? [t.header] : []), ...(t.footer ? [t.footer] : [])];
+}
+
 export function findElement(id) {
-  for (const p of state.template.pages) {
-    const e = p.elements.find((x) => x.id === id);
+  for (const p of allContainers()) {
+    const e = (p.elements || []).find((x) => x.id === id);
     if (e) return e;
   }
   return null;
@@ -104,6 +125,15 @@ export function select(ids, additive = false) {
     state.selection = [...s];
   } else state.selection = ids.filter(Boolean);
   emit('selection');
+}
+
+/** A placeholder name not yet used in the template (signature_1, upload_2...). */
+export function uniquePlaceholder(base) {
+  const used = new Set();
+  for (const c of allContainers()) for (const e of c.elements || []) if (e.placeholder) used.add(e.placeholder);
+  let i = 1;
+  while (used.has(`${base}_${i}`)) i++;
+  return `${base}_${i}`;
 }
 
 export function uid(prefix = 'e') {
@@ -138,6 +168,7 @@ export function loadTemplate(t) {
   for (const p of copy.pages) p.elements = p.elements || [];
   state.template = copy;
   state.pageIndex = 0;
+  state.band = null;
   state.selection = [];
   state.bgImages = {};
   state.dirty = false;

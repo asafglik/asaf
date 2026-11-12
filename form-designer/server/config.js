@@ -32,4 +32,7 @@ export const config = {
   allowRemoteImages: bool(env.FD_ALLOW_REMOTE_IMAGES, !!fileCfg.allowRemoteImages),
   sofficePath: env.SOFFICE_PATH || fileCfg.sofficePath || '',
   historyLimit: +(fileCfg.historyLimit || 20),
+  // smart design agent (Claude). ANTHROPIC_API_KEY is read by the SDK as well.
+  anthropicApiKey: fileCfg.anthropicApiKey || '',
+  aiModel: env.FD_AI_MODEL || fileCfg.aiModel || 'claude-opus-5-5',
 };

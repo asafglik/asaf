@@ -36,6 +36,11 @@ export function listTemplates() {
           description: t.description || '',
           pages: (t.pages || []).length,
           updatedAt: t.updatedAt || null,
+          createdAt: t.createdAt || null,
+          customers: t.customers || [],
+          format: t.schema?.format || null,
+          placeholders: countPlaceholders(t),
+          hasSource: !!t.sourcePdf,
         };
       } catch {
         return null;
@@ -43,6 +48,15 @@ export function listTemplates() {
     })
     .filter(Boolean)
     .sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+}
+
+function countPlaceholders(t) {
+  let c = 0;
+  const scan = (els) => (els || []).forEach((e) => { if (e.type === 'signature' || e.type === 'upload') c++; });
+  (t.pages || []).forEach((p) => scan(p.elements));
+  scan(t.header?.elements);
+  scan(t.footer?.elements);
+  return c;
 }
 
 const memCache = new Map(); // id -> { mtimeMs, template }
@@ -76,6 +90,7 @@ export function saveTemplate(id, template) {
     for (const o of old.slice(0, Math.max(0, old.length - config.historyLimit))) fs.rmSync(path.join(hdir, o));
   }
   const t = { ...template, id: String(id), updatedAt: new Date().toISOString() };
+  if (!t.createdAt) t.createdAt = t.updatedAt;
   const tmp = f + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(t));
   fs.renameSync(tmp, f);
@@ -108,4 +123,102 @@ export function getHistoryVersion(id, version) {
   const f = path.join(dir(), '.history', String(id), `${version}.json`);
   if (!fs.existsSync(f)) throw Object.assign(new Error('גרסה לא נמצאה'), { status: 404 });
   return JSON.parse(fs.readFileSync(f, 'utf8'));
+}
+
+// ---------------------------------------------------------------- duplicate
+export function duplicateTemplate(id, newId, name) {
+  const src = getTemplate(id);
+  const target = newId ? String(newId) : nextId();
+  if (!validId(target)) throw Object.assign(new Error('מספר תבנית לא תקין'), { status: 400 });
+  if (templateExists(target)) throw Object.assign(new Error(`תבנית ${target} כבר קיימת`), { status: 409 });
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.name = name || `${src.name || ''} (עותק)`;
+  copy.createdAt = new Date().toISOString();
+  copy.duplicatedFrom = String(id);
+  return saveTemplate(target, copy);
+}
+
+// ---------------------------------------------------------------- customers
+// storage/customers.json : [{ id, name, code, contact, email, phone, notes, apiKey, createdAt }]
+// A template is linked to customers through template.customers = [customerId, ...]
+function customersFile() {
+  fs.mkdirSync(config.storageDir, { recursive: true });
+  return path.join(config.storageDir, 'customers.json');
+}
+
+export function listCustomers() {
+  try {
+    return JSON.parse(fs.readFileSync(customersFile(), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function writeCustomers(list) {
+  const f = customersFile();
+  fs.writeFileSync(f + '.tmp', JSON.stringify(list, null, 2));
+  fs.renameSync(f + '.tmp', f);
+}
+
+export function getCustomer(id) {
+  const c = listCustomers().find((x) => x.id === String(id));
+  if (!c) throw Object.assign(new Error('לקוח לא נמצא'), { status: 404 });
+  return c;
+}
+
+export function saveCustomer(data) {
+  const list = listCustomers();
+  const name = String(data.name || '').trim();
+  if (!name) throw Object.assign(new Error('חסר שם לקוח'), { status: 400 });
+  let c = data.id ? list.find((x) => x.id === String(data.id)) : null;
+  const fields = ['name', 'code', 'contact', 'email', 'phone', 'notes', 'apiKey'];
+  if (c) {
+    for (const k of fields) if (k in data) c[k] = data[k] == null ? '' : String(data[k]);
+    c.name = name;
+    c.updatedAt = new Date().toISOString();
+  } else {
+    const nums = list.map((x) => parseInt(x.id, 10)).filter(Number.isFinite);
+    c = { id: String(nums.length ? Math.max(...nums) + 1 : 1), createdAt: new Date().toISOString() };
+    for (const k of fields) c[k] = data[k] == null ? '' : String(data[k]);
+    c.name = name;
+    list.push(c);
+  }
+  if (c.apiKey && list.some((x) => x !== c && x.apiKey === c.apiKey)) throw Object.assign(new Error('מפתח ה-API כבר בשימוש אצל לקוח אחר'), { status: 409 });
+  writeCustomers(list);
+  return c;
+}
+
+export function deleteCustomer(id) {
+  const list = listCustomers();
+  if (!list.some((x) => x.id === String(id))) throw Object.assign(new Error('לקוח לא נמצא'), { status: 404 });
+  writeCustomers(list.filter((x) => x.id !== String(id)));
+  // unlink from templates
+  for (const t of listTemplates()) {
+    const full = getTemplate(t.id);
+    if ((full.customers || []).includes(String(id))) {
+      saveTemplate(t.id, { ...full, customers: full.customers.filter((c) => c !== String(id)) });
+    }
+  }
+}
+
+export function customerByApiKey(key) {
+  if (!key) return null;
+  return listCustomers().find((c) => c.apiKey && c.apiKey === key) || null;
+}
+
+/** Set which templates belong to a customer. */
+export function setCustomerTemplates(customerId, templateIds) {
+  getCustomer(customerId);
+  const want = new Set(templateIds.map(String));
+  for (const t of listTemplates()) {
+    const full = getTemplate(t.id);
+    const cur = new Set(full.customers || []);
+    const has = cur.has(String(customerId));
+    if (want.has(t.id) && !has) cur.add(String(customerId));
+    else if (!want.has(t.id) && has) cur.delete(String(customerId));
+    else continue;
+    const tmp = { ...full, customers: [...cur] };
+    // keep updatedAt meaningful: linking is not a design change, but it is saved
+    saveTemplate(t.id, tmp);
+  }
 }

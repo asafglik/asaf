@@ -1,8 +1,9 @@
 // Designer bootstrap: toolbar actions, dialogs, pages, keyboard shortcuts.
 import {
   state, on, emit, change, undo, redo, select, selectedElements, currentPage, uid,
-  newTemplate, loadTemplate, fullTemplate, pageSizeMm,
+  newTemplate, loadTemplate, fullTemplate, pageSizeMm, ensureBand,
 } from './state.js';
+import './agent.js';
 import { api, keyQuery } from './api.js';
 import { render, addElement, scrollEl } from './canvas.js';
 import { renderProps, pickFile } from './props.js';
@@ -33,7 +34,7 @@ function updateChrome() {
   $('#dirty-dot').classList.toggle('on', state.dirty);
   document.title = `${t.name || 'תבנית'}${t.id ? ' #' + t.id : ''} – מעצב טפסים`;
   $('#zoom-val').textContent = Math.round(state.zoom * 100) + '%';
-  $('#status-page').textContent = `עמוד ${state.pageIndex + 1} מתוך ${t.pages.length}`;
+  $('#status-page').textContent = state.band ? (state.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : `עמוד ${state.pageIndex + 1} מתוך ${t.pages.length}`;
   renderPagesList();
 }
 
@@ -87,6 +88,7 @@ on((w) => {
     if (bg?.type === 'pdf') ensureBackground(bg.pageIndex);
   }
   if (w === 'focus-props') document.querySelector('#props input, #props textarea')?.focus();
+  if (typeof w === 'string' && w.startsWith('open-band:')) openBand(w.slice(10));
   updateChrome();
 });
 
@@ -126,8 +128,15 @@ function showTab(name) {
 function renderPagesList() {
   const t = state.template;
   const { w, h } = pageSizeMm();
-  $('#pages-list').innerHTML = t.pages.map((p, i) => `
-    <button class="page-card${i === state.pageIndex ? ' on' : ''}" data-page="${i}">
+  const bandCard = (band, label) => {
+    const b = t[band];
+    const n = b?.elements?.length || 0;
+    return `<button class="page-card band-card${state.band === band ? ' on' : ''}" data-band="${band}">
+      <span class="page-thumb band-thumb ${band}" style="aspect-ratio:${w}/${h}"><i></i></span>
+      <span class="page-meta">${label}<small>${b && b.enabled !== false ? `${n} רכיבים · ${b.height} מ"מ` : 'לא מוגדרת'}</small></span></button>`;
+  };
+  $('#pages-list').innerHTML = bandCard('header', 'כותרת עליונה') + bandCard('footer', 'כותרת תחתונה') + '<div class="pages-sep"></div>' + t.pages.map((p, i) => `
+    <button class="page-card${i === state.pageIndex && !state.band ? ' on' : ''}" data-page="${i}">
       <span class="page-thumb" style="aspect-ratio:${w}/${h}">${p.background ? '<span class="pt-bg">רקע</span>' : ''}<span class="pt-n">${i + 1}</span></span>
       <span class="page-meta">עמוד ${i + 1}<small>${p.elements.length} רכיבים</small></span>
       <span class="page-move"><span data-pmove="${i}:-1" title="הזזה למעלה">▲</span><span data-pmove="${i}:1" title="הזזה למטה">▼</span></span>
@@ -144,10 +153,22 @@ $('#pages-list').addEventListener('click', (ev) => {
     return;
   }
   const c = ev.target.closest('.page-card');
-  if (c) gotoPage(+c.dataset.page);
+  if (c && c.dataset.band) openBand(c.dataset.band);
+  else if (c) gotoPage(+c.dataset.page);
 });
 
+function openBand(band) {
+  if (!state.template[band]) {
+    change((t) => ensureBand(t, band));
+  }
+  state.band = band;
+  state.selection = [];
+  emit('page');
+  emit('selection');
+}
+
 function gotoPage(i) {
+  state.band = null;
   state.pageIndex = Math.max(0, Math.min(i, state.template.pages.length - 1));
   state.selection = [];
   emit('page');
@@ -370,7 +391,7 @@ async function importDialog() {
       const { w, h } = pageSizeMm();
       const el = createElement('richtext', { html: r.html, overflow: 'paginate' });
       Object.assign(el, { x: 15, y: 15, w: w - 30, h: h - 30, name: file.name });
-      change((t) => t.pages[state.pageIndex].elements.push(el));
+      change((t) => currentPage().elements.push(el));
       select(el.id);
       toast('המסמך יובא כטקסט מעוצב. לחיצה כפולה לעריכה.', 'ok');
       return;
@@ -475,6 +496,22 @@ async function apiHelp() {
   });
 }
 
+async function placeholdersDialog() {
+  const { templatePlaceholders } = await import('/shared/elements.js');
+  const { w, h } = pageSizeMm();
+  const list = templatePlaceholders(fullTemplate(), w, h);
+  const rows = list.map((p) => `<tr><td dir="ltr"><code>${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td dir="ltr">${p.mm.x}, ${p.mm.y}</td><td dir="ltr">${p.mm.width} × ${p.mm.height}</td><td dir="ltr">${p.pdf.x}, ${p.pdf.y}</td></tr>`).join('');
+  await openDialog({
+    title: 'אזורי חתימה ותמונה (placeholders)',
+    wide: true,
+    html: list.length ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>תווית</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה (מ"מ)</th><th>X, Y (נק' PDF)</th></tr></thead><tbody>${rows}</tbody></table>
+      <p class="hint">המיקום במ"מ נמדד מהפינה השמאלית העליונה של הדף. נקודות PDF נמדדות מהפינה השמאלית התחתונה (כמו בספריות חתימה דיגיטלית).<br>
+      ב-API: <code dir="ltr">GET /api/templates/${escapeHtml(state.template.id || '{id}')}/placeholders</code>, וגם בתשובה לשמירת התבנית. בהפקה עם <code dir="ltr">output=json</code> מוחזרים המיקומים בפועל בכל עמוד (גם אחרי מעבר עמודים).</p>`
+      : '<p class="muted">אין בתבנית אזורי חתימה או העלאת תמונה. הוסיפו אותם מסרגל הרכיבים.</p>',
+    buttons: [{ label: 'סגירה', primary: true }],
+  });
+}
+
 async function fontsDialog() {
   const list = () => state.fonts.map((f) => `<li><span style="font-family:'${escapeHtml(f.family)}'">${escapeHtml(f.family)} – אבגד abc 123</span><span class="muted">${{ bundled: 'מובנה', system: 'Office', uploaded: 'הועלה' }[f.source]}</span>${f.source === 'uploaded' ? `<button type="button" class="mini danger" data-del-font="${escapeHtml(f.family)}">✕</button>` : ''}</li>`).join('');
   await openDialog({
@@ -561,14 +598,14 @@ function copySel() {
 function paste(offset = 5) {
   if (!clipboard) return;
   const copies = clipboard.map((e) => ({ ...JSON.parse(JSON.stringify(e)), id: uid(), x: e.x + offset, y: e.y + offset }));
-  change((t) => t.pages[state.pageIndex].elements.push(...copies));
+  change((t) => currentPage().elements.push(...copies));
   clipboard = copies;
   select(copies.map((c) => c.id));
 }
 function deleteSel() {
   const ids = new Set(state.selection);
   if (!ids.size) return;
-  change((t) => { const p = t.pages[state.pageIndex]; p.elements = p.elements.filter((e) => !ids.has(e.id)); });
+  change((t) => { const p = currentPage(); p.elements = p.elements.filter((e) => !ids.has(e.id)); });
   select([]);
 }
 function nudge(dx, dy) {
@@ -579,7 +616,7 @@ function nudge(dx, dy) {
 function zOrder(front) {
   const ids = new Set(state.selection);
   change((t) => {
-    const p = t.pages[state.pageIndex];
+    const p = currentPage();
     const sel = p.elements.filter((e) => ids.has(e.id));
     const rest = p.elements.filter((e) => !ids.has(e.id));
     p.elements = front ? [...rest, ...sel] : [...sel, ...rest];
@@ -650,6 +687,11 @@ async function runAction(a) {
         change((t) => t.pages.splice(state.pageIndex, 1));
         gotoPage(Math.min(state.pageIndex, state.template.pages.length - 1));
         break;
+      case 'band-exit': gotoPage(state.pageIndex); break;
+      case 'manage': location.href = '/'; break;
+      case 'header': openBand('header'); showTab('pages'); break;
+      case 'footer': openBand('footer'); showTab('pages'); break;
+      case 'placeholders': await placeholdersDialog(); break;
       case 'api-help': await apiHelp(); break;
       case 'fonts': await fontsDialog(); break;
       case 'history': await historyDialog(); break;
@@ -728,6 +770,15 @@ async function init() {
     toast(e.message, 'error');
   }
   let id = decodeURIComponent(location.hash.slice(1));
+  if (id === 'new') {
+    startNew();
+    state.dirty = false;
+    zoomFit();
+    renderTree();
+    updateChrome();
+    renderProps();
+    return;
+  }
   if (!id) { try { id = localStorage.getItem('fd-last') || ''; } catch { /* ignore */ } }
   let opened = false;
   if (id) {

@@ -7,21 +7,51 @@ import express from 'express';
 import { config, ROOT } from './config.js';
 import * as store from './storage.js';
 import { describeData, detectFormat } from './data.js';
-import { renderPdf, findChrome, closeBrowser } from './render/pdf.js';
+import { renderPdf, findChrome, closeBrowser, renderPageImage } from './render/pdf.js';
 import { barcodeSvg, SYMBOLOGIES } from './barcode.js';
 import { listFonts, fontsCssForWeb, resolveFontFile, saveUploadedFont, deleteUploadedFont } from './fonts.js';
 import { docxToHtml, officeToPdf, findSoffice } from './import.js';
+import { templatePlaceholders } from '../shared/elements.js';
+import { pageSize } from './render/html.js';
+import { autoDesign, designRequest, aiAvailable } from './ai.js';
 
 const app = express();
 app.disable('x-powered-by');
 const full = config.mode !== 'render';
 
 // ------------------------------------------------------------- auth
+// FD_API_KEY = admin key (designer + everything). A customer's own API key
+// (set in the management screen) can only render / read that customer's templates.
+function requestKey(req) {
+  return req.get('x-api-key') || req.query.apiKey || (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+}
+
 function apiKey(req, res, next) {
+  const k = requestKey(req);
+  if (config.apiKey && k === config.apiKey) return next();
+  const customer = k ? store.customerByApiKey(k) : null;
+  if (customer) {
+    req.customer = customer;
+    return next();
+  }
   if (!config.apiKey) return next();
-  const k = req.get('x-api-key') || req.query.apiKey || (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  if (k === config.apiKey) return next();
   res.status(401).json({ error: 'נדרש מפתח API תקין (כותרת x-api-key)' });
+}
+
+function adminOnly(req, res, next) {
+  if (req.customer) return res.status(403).json({ error: 'מפתח לקוח מאפשר הפקה בלבד' });
+  next();
+}
+
+function checkCustomerAccess(req, template) {
+  if (req.customer && !(template.customers || []).includes(req.customer.id)) {
+    throw Object.assign(new Error(`תבנית ${template.id} אינה משויכת ללקוח`), { status: 403 });
+  }
+}
+
+function withPlaceholders(t) {
+  const { width, height } = pageSize(t);
+  return { ...t, sourcePdf: undefined, placeholders: templatePlaceholders(t, width, height) };
 }
 
 const asyncH = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -37,14 +67,17 @@ function pdfFileName(req, template) {
 
 async function sendRender(req, res, templateId, data, format) {
   const template = store.getTemplate(String(templateId));
+  checkCustomerAccess(req, template);
   const started = Date.now();
-  const { pdf, errors, pages } = await renderPdf(template, data, { format });
+  const { pdf, errors, pages, placeholders } = await renderPdf(template, data, { format });
   const name = pdfFileName(req, template);
   res.set('X-Render-Pages', String(pages));
   res.set('X-Render-Ms', String(Date.now() - started));
   res.set('X-Render-Warnings', String(errors.length));
-  if (req.query.output === 'base64' || req.body?.output === 'base64') {
-    return res.json({ templateId: template.id, pages, warnings: errors, fileName: name, pdfBase64: pdf.toString('base64') });
+  res.set('X-Render-Placeholders', String(placeholders.length));
+  const output = req.query.output || req.body?.output;
+  if (output === 'base64' || output === 'json') {
+    return res.json({ templateId: template.id, pages, warnings: errors, fileName: name, placeholders, pdfBase64: pdf.toString('base64') });
   }
   res.type('application/pdf');
   const disp = req.query.download === '1' || req.query.download === 'true' ? 'attachment' : 'inline';
@@ -76,28 +109,85 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, mode: config.mode, chrome: findChrome() || null, libreoffice: full ? findSoffice() : undefined, templates: store.listTemplates().length });
 });
 
-app.get('/api/templates', apiKey, (req, res) => res.json(store.listTemplates()));
+app.get('/api/templates', apiKey, (req, res) => {
+  let list = store.listTemplates();
+  if (req.customer) list = list.filter((t) => t.customers.includes(req.customer.id));
+  else if (req.query.customer) list = list.filter((t) => t.customers.includes(String(req.query.customer)));
+  res.json(list);
+});
+app.get('/api/templates/:id/placeholders', apiKey, (req, res) => {
+  const t = store.getTemplate(req.params.id);
+  checkCustomerAccess(req, t);
+  const { width, height } = pageSize(t);
+  res.json({ templateId: t.id, page: { width, height, unit: 'mm' }, placeholders: templatePlaceholders(t, width, height) });
+});
 app.get('/api/templates/:id', apiKey, (req, res) => {
   const t = store.getTemplate(req.params.id);
+  checkCustomerAccess(req, t);
   if (req.query.download) res.set('Content-Disposition', `attachment; filename="template-${t.id}.json"`);
   res.json(t);
 });
 
 // ------------------------------------------------------------- designer API
 if (full) {
-  app.use('/api', apiKey, jsonBody);
+  app.use('/api', apiKey, adminOnly, jsonBody);
 
   app.post('/api/templates', (req, res) => {
     const t = req.body || {};
     let id = t.id !== undefined && t.id !== '' ? String(t.id) : store.nextId();
     if (!store.validId(id)) return res.status(400).json({ error: 'מספר תבנית יכול להכיל ספרות, אותיות לועזיות, - ו-_' });
     if (store.templateExists(id) && req.query.overwrite !== '1') return res.status(409).json({ error: `תבנית ${id} כבר קיימת` });
-    res.status(201).json(store.saveTemplate(id, t));
+    res.status(201).json(withPlaceholders(store.saveTemplate(id, t)));
   });
 
   app.put('/api/templates/:id', (req, res) => {
-    res.json(store.saveTemplate(req.params.id, req.body || {}));
+    res.json(withPlaceholders(store.saveTemplate(req.params.id, req.body || {})));
   });
+
+  app.post('/api/templates/:id/duplicate', (req, res) => {
+    const { id, name } = req.body || {};
+    res.status(201).json(withPlaceholders(store.duplicateTemplate(req.params.id, id, name)));
+  });
+
+  // only the customer links of a template (from the management screen)
+  app.put('/api/templates/:id/customers', (req, res) => {
+    const t = store.getTemplate(req.params.id);
+    const ids = (req.body?.customers || []).map(String);
+    res.json(withPlaceholders(store.saveTemplate(t.id, { ...t, customers: ids })));
+  });
+
+  // ---- customers
+  app.get('/api/customers', (req, res) => {
+    const templates = store.listTemplates();
+    res.json(store.listCustomers().map((c) => ({ ...c, templates: templates.filter((t) => t.customers.includes(c.id)).map((t) => t.id) })));
+  });
+  app.post('/api/customers', (req, res) => res.status(201).json(store.saveCustomer({ ...(req.body || {}), id: undefined })));
+  app.put('/api/customers/:id', (req, res) => res.json(store.saveCustomer({ ...(req.body || {}), id: req.params.id })));
+  app.delete('/api/customers/:id', (req, res) => { store.deleteCustomer(req.params.id); res.json({ ok: true }); });
+  app.put('/api/customers/:id/templates', (req, res) => {
+    store.setCustomerTemplates(req.params.id, req.body?.templates || []);
+    res.json({ ok: true });
+  });
+  // installation bundle for a client server: all the customer's templates in one file
+  app.get('/api/customers/:id/bundle', (req, res) => {
+    const c = store.getCustomer(req.params.id);
+    const templates = store.listTemplates().filter((t) => t.customers.includes(c.id)).map((t) => store.getTemplate(t.id));
+    res.set('Content-Disposition', `attachment; filename="bundle-customer-${c.id}.json"`);
+    res.json({ kind: 'form-designer-bundle', version: 1, createdAt: new Date().toISOString(), customer: { id: c.id, name: c.name, code: c.code }, templates });
+  });
+
+  // ---- smart design agent
+  app.get('/api/ai/status', (req, res) => res.json({ available: aiAvailable(), model: aiAvailable() ? config.aiModel : null }));
+  app.post('/api/ai/auto-design', asyncH(async (req, res) => {
+    res.json(await autoDesign(req.body || {}));
+  }));
+  app.post('/api/ai/request', asyncH(async (req, res) => {
+    const body = req.body || {};
+    if (aiAvailable() && body.template && !body.designImage) {
+      body.designImage = await renderPageImage(body.template, body.template.schema?.sample || {}, body.pageIndex || 0).catch(() => null);
+    }
+    res.json(await designRequest(body));
+  }));
 
   app.delete('/api/templates/:id', (req, res) => {
     store.deleteTemplate(req.params.id);

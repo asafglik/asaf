@@ -1,7 +1,7 @@
 {
   "id": "1001",
   "name": "חשבונית מס - דוגמה",
-  "description": "תבנית לדוגמה: טבלת פריטים עם מעבר עמודים, שדות מחושבים, QR וברקוד",
+  "description": "תבנית לדוגמה: טבלת פריטים עם מעבר עמודים, שדות מחושבים, QR, ברקוד, כותרת תחתונה ואזור חתימה",
   "version": 1,
   "page": {
     "size": "A4",
@@ -12,6 +12,38 @@
     "sample": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<invoice number=\"2026-0457\">\n  <date>2026-11-12</date>\n  <dueDate>2026-12-12</dueDate>\n  <company>\n    <name>אלפא מערכות בע\"מ</name>\n    <taxId>514789632</taxId>\n    <address>רחוב הברזל 12, תל אביב</address>\n  </company>\n  <customer>\n    <name>ישראל ישראלי</name>\n    <id>032145678</id>\n    <address>שדרות רוטשילד 45, תל אביב</address>\n    <email>israel@example.co.il</email>\n    <vip>true</vip>\n  </customer>\n  <vat>18</vat>\n  <items>\n    <item><sku>A-100</sku><description>רישיון תוכנה שנתי</description><qty>2</qty><price>1200</price></item>\n    <item><sku>B-220</sku><description>שעות ייעוץ והטמעה</description><qty>12</qty><price>350</price></item>\n    <item><sku>C-310</sku><description>הדרכת משתמשים באתר הלקוח</description><qty>1</qty><price>1800</price></item>\n  </items>\n  <notes>התשלום יבוצע בהעברה בנקאית תוך 30 יום.</notes>\n</invoice>\n",
     "arrays": [
       "items.item"
+    ]
+  },
+  "footer": {
+    "enabled": true,
+    "height": 15,
+    "showOn": "all",
+    "elements": [
+      {
+        "id": "e19",
+        "type": "line",
+        "x": 12,
+        "y": 2,
+        "w": 186,
+        "h": 1,
+        "thickness": 0.5,
+        "color": "#999999"
+      },
+      {
+        "id": "e20",
+        "type": "text",
+        "x": 12,
+        "y": 4,
+        "w": 186,
+        "h": 6,
+        "text": "עמוד {{page}} מתוך {{pages}}",
+        "style": {
+          "fontFamily": "Heebo",
+          "fontSize": 8,
+          "align": "center",
+          "color": "#666666"
+        }
+      }
     ]
   },
   "pages": [
@@ -334,27 +366,21 @@
         },
         {
           "id": "e18",
-          "type": "line",
+          "type": "signature",
+          "name": "חתימת הלקוח",
           "x": 12,
-          "y": 282,
-          "w": 186,
-          "h": 1,
-          "thickness": 0.5,
-          "color": "#999999"
-        },
-        {
-          "id": "e19",
-          "type": "text",
-          "x": 12,
-          "y": 284,
-          "w": 186,
-          "h": 6,
-          "text": "עמוד {{page}} מתוך {{pages}}",
+          "y": 262,
+          "w": 60,
+          "h": 16,
+          "placeholder": "customer_signature",
+          "label": "חתימת הלקוח",
+          "signer": "לקוח",
+          "required": true,
+          "showOn": "last",
           "style": {
-            "fontFamily": "Heebo",
             "fontSize": 8,
-            "align": "center",
-            "color": "#666666"
+            "color": "#4b5563",
+            "padding": 0
           }
         }
       ]
