@@ -37,9 +37,10 @@
       </div>
       <div class="mtable-wrap">
         <table class="mtable" id="tpl-table">
-          <thead><tr><th>מספר</th><th>שם התבנית</th><th>לקוחות</th><th>עמודים</th><th title="אזורי חתימה ותמונה">placeholders</th><th>עודכן</th><th></th></tr></thead>
+          <thead><tr><th>מספר</th><th>שם התבנית</th><th>לקוחות</th><th>עמודים</th><th title="מספר אזורי החתימה והעלאת התמונה">חתימות ותמונות</th><th>עודכן</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
+        <div class="empty-hint" id="tpl-noresults" hidden>לא נמצאו תבניות שמתאימות לחיפוש. <button class="link" onclick="document.getElementById('tpl-search').value='';document.getElementById('tpl-customer').value='';document.getElementById('tpl-search').dispatchEvent(new Event('input'))">ניקוי החיפוש</button></div>
         <div class="empty-hint" id="tpl-empty" hidden>אין עדיין תבניות. <a href="/designer.html#new">יצירת תבנית ראשונה</a></div>
       </div>
     </section>

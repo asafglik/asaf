@@ -80,16 +80,17 @@ function renderTemplates() {
   });
   $('#tpl-count').textContent = `${templates.length} תבניות${list.length !== templates.length ? ` · מוצגות ${list.length}` : ''}`;
   $('#tpl-empty').hidden = templates.length > 0;
+  $('#tpl-noresults').hidden = !(templates.length && !list.length);
   $('#tpl-table tbody').innerHTML = list.map((t) => `
     <tr data-id="${escapeHtml(t.id)}">
       <td class="t-id">#${escapeHtml(t.id)}</td>
       <td class="t-name"><a href="/designer.html#${encodeURIComponent(t.id)}">${escapeHtml(t.name || 'ללא שם')}</a>
-        ${t.hasSource ? '<span class="badge src" title="נבנתה על קובץ PDF מקור">PDF</span>' : ''} ${t.format ? `<span class="badge">${t.format.toUpperCase()}</span>` : ''}
+        ${t.hasSource ? '<span class="badge src" title="נבנתה על קובץ PDF מקור">PDF</span>' : ''} ${t.format ? `<span class="badge">${escapeHtml(String(t.format).toUpperCase())}</span>` : ''}
         <small>${escapeHtml(t.description || '')}</small></td>
       <td><div class="tags">${t.customers.map((c) => `<span class="tag">${escapeHtml(custName(c))}</span>`).join('')}<button class="tag add" data-act="link" title="שיוך ללקוחות">+ שיוך</button></div></td>
       <td class="t-num">${t.pages}</td>
-      <td class="t-num">${t.placeholders || ''}</td>
-      <td class="t-num">${fmtDate(t.updatedAt)}</td>
+      <td class="t-num">${t.placeholders || '—'}</td>
+      <td class="t-num">${fmtDate(t.updatedAt) || '—'}</td>
       <td class="t-actions">
         <a class="btn" href="/designer.html#${encodeURIComponent(t.id)}">עריכה</a>
         <button class="btn" data-act="duplicate">שכפול</button>
@@ -147,9 +148,9 @@ async function previewTemplate(id) {
 
 async function showPlaceholders(id) {
   const r = await api.get(`/api/templates/${encodeURIComponent(id)}/placeholders`);
-  const rows = r.placeholders.map((p) => `<tr><td dir="ltr"><code>${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td dir="ltr">${p.mm.x}, ${p.mm.y}</td><td dir="ltr">${p.mm.width} × ${p.mm.height}</td></tr>`).join('');
+  const rows = r.placeholders.map((p) => `<tr><td><code dir="ltr">${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'העלאת תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td><bdi>${p.mm.x}, ${p.mm.y}</bdi></td><td><bdi>${p.mm.width} × ${p.mm.height}</bdi></td></tr>`).join('');
   await openDialog({
-    title: `placeholders בתבנית #${id}`,
+    title: `אזורי חתימה ותמונה – תבנית ${id}`,
     wide: true,
     html: r.placeholders.length
       ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>תווית</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה</th></tr></thead><tbody>${rows}</tbody></table>
@@ -187,6 +188,12 @@ $('#tpl-table').addEventListener('click', async (ev) => {
         if (open) return;
         const pop = document.createElement('div');
         pop.className = 'more-pop';
+        // fixed position so the table container does not clip it; open upwards near the bottom
+        const r = b.getBoundingClientRect();
+        pop.style.position = 'fixed';
+        pop.style.left = `${Math.max(8, r.left)}px`;
+        if (window.innerHeight - r.bottom < 230) pop.style.bottom = `${window.innerHeight - r.top + 4}px`;
+        else pop.style.top = `${r.bottom + 4}px`;
         pop.innerHTML = `<button data-act="preview">תצוגה מקדימה PDF</button><button data-act="link">שיוך ללקוחות</button><button data-act="placeholders">אזורי חתימה ותמונה</button><button data-act="export">ייצוא (JSON)</button><hr><button data-act="delete" class="danger">מחיקה</button>`;
         b.parentElement.appendChild(pop);
         break;
@@ -216,7 +223,7 @@ function renderCustomers() {
       <h3>${escapeHtml(c.name)} ${c.code ? `<span class="code">${escapeHtml(c.code)}</span>` : ''}</h3>
       <div class="meta">${[c.contact, c.email, c.phone].filter(Boolean).map(escapeHtml).join(' · ') || '&nbsp;'}</div>
       <div class="tags">${c.templates.map((id) => `<span class="tag" title="${escapeHtml(templates.find((t) => t.id === id)?.name || '')}">#${escapeHtml(id)}</span>`).join('') || '<span class="muted">אין תבניות משויכות</span>'}</div>
-      <div class="key">${c.apiKey ? '🔑 מפתח API מוגדר – הלקוח יכול להפיק רק את התבניות שלו' : 'ללא מפתח API ייעודי'}</div>
+      <div class="key">${c.hasApiKey ? `🔑 מפתח API מוגדר (מסתיים ב-<bdi>${escapeHtml(c.apiKeyHint || '')}</bdi>) – הלקוח יכול להפיק רק את התבניות שלו` : 'ללא מפתח API ייעודי'}</div>
       <div class="btn-row">
         <button class="btn" data-act="c-templates">תבניות</button>
         <button class="btn" data-act="c-edit">עריכה</button>
@@ -241,17 +248,27 @@ async function editCustomer(c = {}) {
       <label class="f"><span>איש קשר</span><input id="c-contact" class="input-lg" value="${escapeHtml(c.contact || '')}"></label>
       <label class="f"><span>אימייל</span><input id="c-email" class="input-lg" dir="ltr" value="${escapeHtml(c.email || '')}"></label>
       <label class="f"><span>טלפון</span><input id="c-phone" class="input-lg" dir="ltr" value="${escapeHtml(c.phone || '')}"></label>
-      <label class="f"><span>מפתח API</span><input id="c-key" class="input-lg" dir="ltr" value="${escapeHtml(c.apiKey || '')}" placeholder="ללא"></label>
-      <div class="btn-row"><button type="button" class="btn" id="c-gen">יצירת מפתח</button><span class="hint">עם המפתח הזה בכותרת <code dir="ltr">x-api-key</code>, הלקוח יכול להפיק רק תבניות שמשויכות אליו.</span></div>
+      <label class="f"><span>${c.hasApiKey ? 'מפתח API חדש' : 'מפתח API'}</span><input id="c-key" class="input-lg" dir="ltr" value="" placeholder="${c.hasApiKey ? `מוגדר מפתח שמסתיים ב-${escapeHtml(c.apiKeyHint || '')} – השאירו ריק כדי לא לשנות` : 'ללא'}"></label>
+      <div class="btn-row"><button type="button" class="btn" id="c-gen">יצירת מפתח</button>${c.hasApiKey ? '<label class="f-check"><input type="checkbox" id="c-rmkey"> הסרת המפתח הקיים</label>' : ''}</div>
+      <p class="hint" id="c-keyhint">עם המפתח בכותרת <code dir="ltr">x-api-key</code> הלקוח יכול להפיק רק תבניות שמשויכות אליו. המפתח נשמר בשרת בצורה מוצפנת (hash) ולא יוצג שוב – העתיקו אותו עכשיו.</p>
       <label class="f f-col"><span>הערות</span><textarea id="c-notes" rows="2">${escapeHtml(c.notes || '')}</textarea></label>`,
     buttons: [{ label: 'ביטול' }, { label: 'שמירה', primary: true, action: (b) => {
       const body = {
         name: $('#c-name', b).value, code: $('#c-code', b).value, contact: $('#c-contact', b).value,
         email: $('#c-email', b).value, phone: $('#c-phone', b).value, apiKey: $('#c-key', b).value.trim(), notes: $('#c-notes', b).value,
+        removeApiKey: !!$('#c-rmkey', b)?.checked,
       };
       return c.id ? api.put(`/api/customers/${c.id}`, body) : api.post('/api/customers', body);
     } }],
-    onOpen: (b) => { $('#c-gen', b).onclick = () => { $('#c-key', b).value = randomKey(); }; $('#c-name', b).focus(); },
+    onOpen: (b) => {
+      $('#c-gen', b).onclick = () => {
+        const k = $('#c-key', b);
+        k.value = randomKey();
+        k.select();
+        navigator.clipboard?.writeText(k.value).then(() => toast('המפתח הועתק ללוח'), () => {});
+      };
+      $('#c-name', b).focus();
+    },
   });
   if (res) { toast('הלקוח נשמר', 'ok'); await load(); }
 }

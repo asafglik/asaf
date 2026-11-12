@@ -11,7 +11,8 @@ if (!file) {
   console.log('Usage: import-bundle <bundle.json> [--storage <dir>]');
   process.exit(1);
 }
-const { saveTemplate, validId } = await import('../server/storage.js');
+const { saveTemplate, validId, importCustomer } = await import('../server/storage.js');
+const { sanitizeTemplate } = await import('../server/sanitize.js');
 const bundle = JSON.parse(fs.readFileSync(file, 'utf8'));
 if (bundle.kind !== 'form-designer-bundle') {
   console.error('error: not a form designer bundle');
@@ -19,7 +20,11 @@ if (bundle.kind !== 'form-designer-bundle') {
 }
 for (const t of bundle.templates || []) {
   if (!validId(t.id)) { console.warn(`skipped template with invalid id "${t.id}"`); continue; }
-  saveTemplate(t.id, t);
+  saveTemplate(t.id, sanitizeTemplate(t));
   console.log(`installed template ${t.id} - ${t.name || ''}`);
+}
+if (bundle.customer?.id) {
+  importCustomer(bundle.customer);
+  console.log(`customer ${bundle.customer.name}${bundle.customer.apiKeyHash ? ' (API key installed)' : ''}`);
 }
 console.log(`done: ${bundle.templates?.length || 0} template(s) for customer ${bundle.customer?.name || ''}`);

@@ -2,6 +2,8 @@
 import { state, change, emit } from './state.js';
 import { escapeHtml } from '/shared/elements.js';
 import { allValuePaths } from './datatree.js';
+import { sanitizeRichHtml } from './sanitize.js';
+import { exprPath } from '/shared/expr.js';
 
 let editing = null;
 
@@ -41,7 +43,7 @@ function toolbarHtml() {
 
 export function startRichEdit(el, node) {
   if (editing) return;
-  node.innerHTML = el.html || '<p><br></p>';
+  node.innerHTML = sanitizeRichHtml(el.html) || '<p><br></p>';
   node.contentEditable = 'true';
   node.classList.add('rt-editing');
   node.style.overflow = 'auto';
@@ -54,8 +56,12 @@ export function startRichEdit(el, node) {
   document.body.appendChild(bar);
   const place = () => {
     const r = node.getBoundingClientRect();
-    bar.style.top = Math.max(60, r.top - bar.offsetHeight - 8) + 'px';
-    bar.style.left = Math.max(8, Math.min(r.left, window.innerWidth - bar.offsetWidth - 8)) + 'px';
+    const area = document.querySelector('.center').getBoundingClientRect();
+    const above = r.top - bar.offsetHeight - 8;
+    // above the text when there is room, otherwise below it (never over the text)
+    const top = above >= area.top + 4 ? above : Math.min(r.bottom + 8, area.bottom - bar.offsetHeight - 4);
+    bar.style.top = Math.max(area.top + 4, top) + 'px';
+    bar.style.left = Math.max(area.left + 4, Math.min(r.left, area.right - bar.offsetWidth - 4)) + 'px';
   };
   place();
   const scroller = document.getElementById('canvas-scroll');
@@ -92,7 +98,7 @@ export function startRichEdit(el, node) {
       });
       node.querySelectorAll('span[style*="xxx-large"], span[style*="-webkit-xxx-large"]').forEach((s) => { s.style.fontSize = val + 'pt'; });
     } else if (cmd === 'insertField') {
-      const txt = val === '__page' ? '{{page}}' : val === '__pages' ? '{{pages}}' : `{{${val}}}`;
+      const txt = val === '__page' ? '{{page}}' : val === '__pages' ? '{{pages}}' : `{{${exprPath(val)}}}`;
       document.execCommand('insertText', false, txt);
     } else if (cmd === 'insertTable') {
       const rows = +(prompt('מספר שורות', '2') || 0);
@@ -142,7 +148,7 @@ export function startRichEdit(el, node) {
     scroller.removeEventListener('scroll', place);
     node.removeEventListener('keydown', onKey);
     bar.remove();
-    const html = cleanHtml(node.innerHTML);
+    const html = sanitizeRichHtml(cleanHtml(node.innerHTML));
     node.contentEditable = 'false';
     if (save && html !== el.html) change(() => { el.html = html; });
     else emit('all');

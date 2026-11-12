@@ -23,11 +23,11 @@
       <button class="tb" data-action="new" title="תבנית חדשה">חדש</button>
       <button class="tb" data-action="open" title="פתיחת תבנית (Ctrl+O)">פתיחה</button>
       <button class="tb" data-action="save" title="שמירה (Ctrl+S)">שמירה</button>
-      <button class="tb" data-action="save-as" title="שמירה בשם / במספר אחר">שמירה בשם</button>
+      <button class="tb wide-only" data-action="save-as" title="שמירה בשם / במספר אחר">שמירה בשם</button>
     </div>
 
     <div class="tb-group">
-      <button class="tb" data-action="import" title="יצירת תבנית מקובץ PDF או Word">ייבוא PDF / Word</button>
+      <button class="tb" data-action="import" title="יצירת תבנית מקובץ PDF או Word"><span class="wide-only">ייבוא </span>PDF / Word</button>
       <button class="tb" data-action="data" title="הגדרת עולם הנתונים (XML / JSON)">עולם נתונים</button>
     </div>
 
@@ -52,12 +52,13 @@
     <div class="menu">
       <button class="tb icon" data-action="menu" aria-haspopup="true" title="עוד">⋯</button>
       <div class="menu-pop" id="menu-pop" hidden>
+        <button data-action="save-as" class="narrow-only">שמירה בשם...</button>
         <button data-action="manage">ניהול תבניות ולקוחות</button>
         <hr>
-        <button data-action="placeholders">אזורי חתימה ותמונה (placeholders)</button>
+        <button data-action="placeholders">אזורי חתימה ותמונה</button>
         <button data-action="header">עריכת כותרת עליונה</button>
         <button data-action="footer">עריכת כותרת תחתונה</button>
-        <button data-action="api-help">שימוש מהשרת (API)</button>
+        <button data-action="api-help">הפקת PDF מהשרת (API)</button>
         <button data-action="fonts">ניהול גופנים</button>
         <button data-action="history">היסטוריית גרסאות</button>
         <hr>
@@ -71,8 +72,8 @@
 
   <main class="layout">
     <aside class="side side-start">
-      <nav class="tabs" role="tablist">
-        <button class="tab on" data-tab="tools" role="tab">רכיבים</button>
+      <nav class="tabs" role="tablist" aria-label="סרגל צד">
+        <button class="tab on" data-tab="tools" role="tab" aria-selected="true">רכיבים</button>
         <button class="tab" data-tab="data" role="tab">נתונים</button>
         <button class="tab" data-tab="pages" role="tab">עמודים</button>
         <button class="tab tab-ai" data-tab="agent" role="tab">סוכן ✨</button>

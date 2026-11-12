@@ -2,7 +2,8 @@
 // PDF) and by the designer canvas (live preview with sample data), so what
 // the designer shows is what the PDF prints.
 
-import { evalExpr, interpolate, makeScope, PAGE_TOKENS } from './expr.js';
+import { evalExpr, interpolate, makeScope, PAGE_TOKENS, isTrueValue, exprPath } from './expr.js';
+import { parseDate } from './format.js';
 import { formatValue, valueToString } from './format.js';
 
 export const MM = 96 / 25.4; // CSS px per mm
@@ -41,7 +42,45 @@ export function escapeHtml(s) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** A value that is placed inside CSS: no characters that can end the declaration or the attribute. */
+export function cssv(v) {
+  return String(v ?? '')
+    .replace(/[<>"'`;{}\\]/g, '')
+    .replace(/url\s*\(|expression\s*\(|javascript:|@import/gi, '')
+    .slice(0, 120);
+}
+
+const CSS_KEYS = ['color', 'fill', 'borderColor', 'lineStyle', 'orientation', 'fit', 'altRowBackground', 'rowHighlightColor', 'valign', 'rotate', 'symbology'];
+const STYLE_OBJS = ['style', 'headerStyle', 'rowStyle', 'footerStyle'];
+
+function cleanObj(o) {
+  const out = {};
+  for (const [k, v] of Object.entries(o || {})) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    out[k] = typeof v === 'string' ? cssv(v) : typeof v === 'number' || typeof v === 'boolean' ? v : undefined;
+  }
+  return out;
+}
+
+/** Copy of an element whose style values are safe to place in CSS. */
+export function cleanElement(el) {
+  const c = { ...el };
+  for (const k of ['__proto__', 'constructor', 'prototype']) delete c[k];
+  for (const k of CSS_KEYS) if (typeof c[k] === 'string') c[k] = cssv(c[k]);
+  for (const k of STYLE_OBJS) if (c[k] && typeof c[k] === 'object') c[k] = cleanObj(c[k]);
+  if (Array.isArray(c.columns)) {
+    c.columns = c.columns.map((col) => {
+      const cc = { ...col };
+      for (const k of ['align', 'color', 'background', 'valign', 'symbology']) if (typeof cc[k] === 'string') cc[k] = cssv(cc[k]);
+      if (cc.fontSize !== undefined) cc.fontSize = Number(cc.fontSize) || undefined;
+      return cc;
+    });
+  }
+  return c;
 }
 
 export function escapeText(s) {
@@ -51,7 +90,7 @@ export function escapeText(s) {
 const GENERIC = /^(serif|sans-serif|monospace|cursive|system-ui)$/;
 export function fontStack(family) {
   if (!family) return 'sans-serif';
-  const fams = String(family).split(',').map((f) => f.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  const fams = cssv(family).split(',').map((f) => f.trim()).filter(Boolean);
   return fams.map((f) => (GENERIC.test(f) ? f : `'${f.replace(/'/g, '')}'`)).join(', ') + ', sans-serif';
 }
 
@@ -103,6 +142,18 @@ export function rowScope(scope, item, index) {
   vars.$index = index;
   vars.$row = index + 1;
   return makeScope(vars, scope);
+}
+
+// a binding is normally a data path; one with '-' or spaces in a segment (first-name, Total Sum)
+// is turned into an expression ($root["first-name"]) instead of being read as a subtraction
+const RAW_PATH = /^[^"'()+*\/<>=!&|?:,{}]+$/;
+function bindingExpr(binding, root = '$root') {
+  const b = String(binding).trim();
+  return RAW_PATH.test(b) && /[\s-]|(^|\.)\d/.test(b) ? exprPath(b, root) : b;
+}
+
+function bindEval(binding, scope, ctx, root) {
+  return safeEval(bindingExpr(binding, root), scope, ctx);
 }
 
 function safeEval(src, scope, ctx) {
@@ -162,7 +213,7 @@ function imageHtml(src, fit) {
 
 // ---------------------------------------------------------------- barcodes
 function barcodeValue(el, scope, ctx) {
-  if (el.valueMode === 'field') return valueToString(safeEval(el.binding, scope, ctx));
+  if (el.valueMode === 'field') return valueToString(bindEval(el.binding, scope, ctx));
   if (el.valueMode === 'expression') return valueToString(safeEval(el.expression, scope, ctx));
   return textValueHtml(el.value ?? '', scope, { ...ctx, design: true }).replace(/<br>/g, '\n')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
@@ -190,7 +241,7 @@ function barcodeHtml(el, scope, ctx, wMm, hMm) {
 
 // ---------------------------------------------------------------- tables
 export function tableRows(el, scope, ctx) {
-  let list = el.binding ? safeEval(el.binding, scope, ctx) : [];
+  let list = el.binding ? bindEval(el.binding, scope, ctx) : [];
   if (list === null || list === undefined || list === '') list = [];
   if (!Array.isArray(list)) list = [list];
   if (el.filter) list = list.filter((it, i) => {
@@ -199,10 +250,17 @@ export function tableRows(el, scope, ctx) {
   });
   if (el.sortBy) {
     const keyed = list.map((it, i) => ({ it, k: safeEval(el.sortBy, rowScope(scope, it, i), ctx) }));
+    const DATE = /^(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})/;
+    const empty = (v) => v === '' || v === null || v === undefined;
     keyed.sort((a, b) => {
-      const na = Number(a.k);
-      const nb = Number(b.k);
-      const r = Number.isFinite(na) && Number.isFinite(nb) ? na - nb : valueToString(a.k).localeCompare(valueToString(b.k), 'he');
+      // empty values always last
+      if (empty(a.k) || empty(b.k)) return empty(a.k) === empty(b.k) ? 0 : empty(a.k) ? 1 : -1;
+      const sa = valueToString(a.k).trim();
+      const sb = valueToString(b.k).trim();
+      let r;
+      if (DATE.test(sa) && DATE.test(sb)) r = (parseDate(sa)?.getTime() || 0) - (parseDate(sb)?.getTime() || 0);
+      else if (sa !== '' && sb !== '' && Number.isFinite(Number(sa.replace(/,/g, ''))) && Number.isFinite(Number(sb.replace(/,/g, '')))) r = Number(sa.replace(/,/g, '')) - Number(sb.replace(/,/g, ''));
+      else r = sa.localeCompare(sb, 'he');
       return el.sortDesc ? -r : r;
     });
     list = keyed.map((x) => x.it);
@@ -223,7 +281,7 @@ function cellCss(col, base) {
 
 function tableCellContent(col, item, rs, ctx, el) {
   if (col.cellType === 'image') {
-    const v = col.expression ? safeEval(col.expression, rs, ctx) : safeEval(col.binding, rs, ctx);
+    const v = col.expression ? safeEval(col.expression, rs, ctx) : bindEval(col.binding, rs, ctx, '$item');
     const src = imageSrc(v);
     const h = n(col.imageHeight, 10);
     return src ? `<img src="${escapeHtml(src)}" style="max-width:100%;height:${h}mm;object-fit:contain" alt="">` : '';
@@ -233,7 +291,7 @@ function tableCellContent(col, item, rs, ctx, el) {
     return `<div style="height:${n(col.imageHeight, 10)}mm">${barcodeHtml(fake, rs, ctx, null, n(col.imageHeight, 10))}</div>`;
   }
   if (col.cellType === 'text') return textValueHtml(col.text || '', rs, ctx);
-  const v = col.expression ? safeEval(col.expression, rs, ctx) : col.binding ? safeEval(col.binding, rs, ctx) : '';
+  const v = col.expression ? safeEval(col.expression, rs, ctx) : col.binding ? bindEval(col.binding, rs, ctx, '$item') : '';
   return valueHtml(v, col.format, col, ctx, ctx.design && item === undefined ? col.binding : '');
 }
 
@@ -297,12 +355,13 @@ export function isVisible(el, scope, ctx) {
 
 /** Inner HTML for an element (content only, no positioning). */
 export function elementInnerHtml(el, scope, ctx) {
+  el = cleanElement(el);
   const st = el.style || {};
   switch (el.type) {
     case 'text':
       return textValueHtml(el.text, scope, ctx);
     case 'field': {
-      const v = el.binding ? safeEval(el.binding, scope, ctx) : '';
+      const v = el.binding ? bindEval(el.binding, scope, ctx) : '';
       return valueHtml(v, el.format, el, ctx, el.binding ? `«${el.binding}»` : '«שדה»');
     }
     case 'computed': {
@@ -311,6 +370,7 @@ export function elementInnerHtml(el, scope, ctx) {
     }
     case 'richtext': {
       const html = interpolate(el.html || '', scope, {
+        html: true,
         escape: (x) => x,
         escapeValue: escapeText,
         onError: (e, ex) => ctx.errors?.push(`${ex}: ${e.message}`),
@@ -319,7 +379,7 @@ export function elementInnerHtml(el, scope, ctx) {
     }
     case 'image': {
       if (el.source === 'field') {
-        const v = el.binding ? safeEval(el.binding, scope, ctx) : '';
+        const v = el.binding ? bindEval(el.binding, scope, ctx) : '';
         const src = imageSrc(v);
         if (!src) return ctx.design ? placeholder('🖼 ' + (el.binding || 'תמונה')) : '';
         return imageHtml(src, el.fit);
@@ -336,7 +396,7 @@ export function elementInnerHtml(el, scope, ctx) {
       return '';
     case 'signature':
     case 'upload': {
-      const v = el.binding ? safeEval(el.binding, scope, ctx) : '';
+      const v = el.binding ? bindEval(el.binding, scope, ctx) : '';
       const src = imageSrc(v);
       if (src) return imageHtml(src, el.fit || 'contain');
       if (el.printFrame === false && !ctx.design) return '';
@@ -353,8 +413,8 @@ export function elementInnerHtml(el, scope, ctx) {
         + (ctx.design ? `<span class="fd-ph-name">🖼 ${escapeHtml(el.placeholder || '')}</span>` : '');
     }
     case 'checkbox': {
-      const v = el.binding ? safeEval(el.binding, scope, ctx) : el.expression ? safeEval(el.expression, scope, ctx) : false;
-      const on = v === true || v === 'true' || v === '1' || v === 1 || v === 'Y' || v === 'y' || v === 'כן' || v === 'X' || v === 'x';
+      const v = el.binding ? bindEval(el.binding, scope, ctx) : el.expression ? safeEval(el.expression, scope, ctx) : false;
+      const on = isTrueValue(v);
       const size = Math.min(n(el.w), n(el.h));
       return `<div style="width:${size}mm;height:${size}mm;border:${n(st.borderWidth, 0.75) || 0.75}pt solid ${st.borderColor || '#000'};display:flex;align-items:center;justify-content:center;font-size:${size * 2}pt;line-height:1;box-sizing:border-box">${on ? '✓' : ''}</div>`;
     }
@@ -365,6 +425,7 @@ export function elementInnerHtml(el, scope, ctx) {
 
 /** Positioned outer style for an element. */
 export function elementOuterCss(el) {
+  el = cleanElement(el);
   const st = { ...DEFAULT_STYLE, ...(el.style || {}) };
   const base = [`left:${n(el.x)}mm`, `top:${n(el.y)}mm`, `width:${n(el.w)}mm`, `height:${n(el.h)}mm`];
   if (el.rotation) base.push(`transform:rotate(${n(el.rotation)}deg)`, 'transform-origin:center');
@@ -391,6 +452,8 @@ export function elementOuterCss(el) {
     case 'table':
       return base.join(';') + ';' + textCss(st);
     default:
+      // rich text flows as normal blocks (it is measured and split into pages)
+      if (el.type === 'richtext') return base.join(';') + ';' + textCss(st) + ';' + boxCss(st) + ';display:block';
       return base.join(';') + ';' + textCss(st) + ';' + boxCss(st) + `;display:flex;flex-direction:column;justify-content:${VALIGN[st.valign] || 'flex-start'}`;
   }
 }

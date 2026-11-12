@@ -17,7 +17,8 @@ export const FORMAT_PRESETS = [
   { value: 'currency', label: 'מטבע ₪' },
   { value: 'currency:USD', label: 'מטבע $' },
   { value: 'currency:EUR', label: 'מטבע €' },
-  { value: 'percent:0', label: 'אחוז (17%)' },
+  { value: 'percent:0', label: 'אחוז משבר (0.17 → 17%)' },
+  { value: 'pct:0', label: 'אחוז (17 → 17%)' },
   { value: 'date:dd/MM/yyyy', label: 'תאריך 12/11/2026' },
   { value: 'date:d MMMM yyyy', label: 'תאריך 12 נובמבר 2026' },
   { value: 'datetime', label: 'תאריך ושעה' },
@@ -44,7 +45,7 @@ export function isNumeric(v) {
   if (typeof v === 'number') return Number.isFinite(v);
   if (typeof v !== 'string') return false;
   const s = v.trim();
-  return s !== '' && /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(s);
+  return s !== '' && (/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(s) || /^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s));
 }
 
 export function parseDate(v) {
@@ -101,7 +102,19 @@ function numberFmt(n, decimals, grouping = true) {
   }).format(n);
 }
 
+const clampDec = (d) => (Number.isFinite(d) ? Math.max(0, Math.min(10, d)) : 2);
+const CURRENCY_ALIASES = { '₪': 'ILS', NIS: 'ILS', 'ש"ח': 'ILS', 'ש״ח': 'ILS', $: 'USD', '€': 'EUR', '£': 'GBP' };
+
+/** Never throws: an invalid format spec falls back to the plain value. */
 export function formatValue(value, spec) {
+  try {
+    return formatValueUnsafe(value, spec);
+  } catch {
+    return valueToString(value);
+  }
+}
+
+function formatValueUnsafe(value, spec) {
   if (!spec) return valueToString(value);
   if (value === null || value === undefined || value === '') return '';
   const parts = String(spec).split(':');
@@ -114,7 +127,7 @@ export function formatValue(value, spec) {
     case 'plain': {
       const n = toNumber(value);
       if (!Number.isFinite(n)) return valueToString(value);
-      const dec = rest === '' ? (Number.isInteger(n) ? 0 : 2) : parseInt(rest, 10);
+      const dec = rest === '' ? (Number.isInteger(n) ? 0 : 2) : clampDec(parseInt(rest, 10));
       return numberFmt(n, dec, kind === 'number');
     }
     case 'currency': {
@@ -123,20 +136,19 @@ export function formatValue(value, spec) {
       let code = 'ILS';
       let dec = 2;
       for (const p of parts) {
-        if (/^\d+$/.test(p)) dec = +p;
-        else if (p) code = p.toUpperCase();
+        if (/^\d+$/.test(p)) dec = clampDec(+p);
+        else if (p) code = CURRENCY_ALIASES[p.trim()] || p.trim().toUpperCase();
       }
       return new Intl.NumberFormat(LOCALE, {
         style: 'currency', currency: code, minimumFractionDigits: dec, maximumFractionDigits: dec,
       }).format(n);
     }
-    case 'percent': {
+    case 'percent': // a fraction: 0.17 -> 17%
+    case 'pct': { // already a percentage: 17 -> 17%
       const n = toNumber(value);
       if (!Number.isFinite(n)) return valueToString(value);
-      const dec = rest === '' ? 0 : parseInt(rest, 10);
-      // values above 1 are treated as already-multiplied percentages (17 -> 17%)
-      const pct = Math.abs(n) <= 1 ? n * 100 : n;
-      return numberFmt(pct, dec) + '%';
+      const dec = rest === '' ? 0 : clampDec(parseInt(rest, 10));
+      return numberFmt(kind === 'percent' ? n * 100 : n, dec) + '%';
     }
     case 'date':
       return formatDate(value, rest || 'dd/MM/yyyy');
@@ -152,7 +164,7 @@ export function formatValue(value, spec) {
       return valueToString(value).trim();
     case 'bool': {
       const [yes = 'כן', no = 'לא'] = rest ? rest.split('/') : [];
-      const v = value === true || value === 'true' || value === '1' || value === 1 || value === 'Y' || value === 'כן';
+      const v = value === true || value === 1 || ['true', '1', 'y', 'yes', 'כן', 'x', 'v', '✓'].includes(String(value).trim().toLowerCase());
       return v ? yes : no;
     }
     default:

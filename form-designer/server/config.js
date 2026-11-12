@@ -3,6 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// dates are formatted in Israel time unless the server says otherwise (TZ / config.json timeZone)
+const tzFromFile = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(process.env.FD_CONFIG || new URL('../config.json', import.meta.url), 'utf8')).timeZone;
+  } catch {
+    return undefined;
+  }
+})();
+if (!process.env.TZ) process.env.TZ = tzFromFile || 'Asia/Jerusalem';
+
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function readJson(file) {
@@ -28,6 +38,9 @@ export const config = {
   chromePath: env.CHROME_PATH || fileCfg.chromePath || '',
   apiKey: env.FD_API_KEY || fileCfg.apiKey || '',
   maxConcurrent: +(env.FD_MAX_CONCURRENT || fileCfg.maxConcurrent || 4),
+  maxQueue: +(env.FD_MAX_QUEUE || fileCfg.maxQueue || 100),
+  renderTimeoutMs: +(env.FD_RENDER_TIMEOUT_MS || fileCfg.renderTimeoutMs || 60000),
+  maxImportBytes: +(fileCfg.maxImportBytes || 25 * 1024 * 1024),
   bodyLimit: env.FD_BODY_LIMIT || fileCfg.bodyLimit || '60mb',
   allowRemoteImages: bool(env.FD_ALLOW_REMOTE_IMAGES, !!fileCfg.allowRemoteImages),
   sofficePath: env.SOFFICE_PATH || fileCfg.sofficePath || '',

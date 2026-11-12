@@ -11,7 +11,7 @@ export const TOOLS = [
   { type: 'barcode', label: 'ברקוד', icon: '|||', hint: 'Code128, EAN, ITF...', symbology: 'code128' },
   { type: 'barcode', label: 'QR', icon: '▣', hint: 'QR, DataMatrix, PDF417', symbology: 'qrcode', key: 'qr' },
   { type: 'signature', label: 'אזור חתימה', icon: '✍', hint: 'מקום לחתימה – מיקומו מוחזר ב-API' },
-  { type: 'upload', label: 'אזור תמונה', icon: '⬚', hint: 'מקום להעלאת תמונה – מיקומו מוחזר ב-API' },
+  { type: 'upload', label: 'אזור העלאת תמונה', icon: '⬚', hint: 'מקום להעלאת תמונה – מיקומו מוחזר ב-API' },
   { type: 'checkbox', label: 'תיבת סימון', icon: '☑', hint: 'מסומנת לפי ערך' },
   { type: 'line', label: 'קו', icon: '—', hint: 'קו אופקי או אנכי' },
   { type: 'rect', label: 'מלבן', icon: '▭', hint: 'מסגרת / רקע' },
@@ -95,10 +95,27 @@ export function createElement(type, opts = {}) {
 }
 
 /** Element for a node dragged from the data tree. */
-export function elementFromNode(node) {
+function guessFormat(sample) {
+  const s = String(sample ?? '').trim();
+  if (/^-?\d+\.\d+$/.test(s)) return 'number:2';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return 'date:dd/MM/yyyy';
+  return '';
+}
+
+export function elementFromNode(node, styleFrom) {
   if (node.kind === 'array') {
-    const cols = (node.children || []).filter((c) => c.kind === 'value').slice(0, 8).map((c) => ({ header: c.name.replace(/^@/, ''), binding: c.path }));
-    return createElement('table', { binding: node.path, columns: cols.length ? cols : undefined });
+    const cols = (node.children || []).filter((c) => c.kind === 'value').slice(0, 8).map((c) => {
+      const f = guessFormat(c.sample);
+      return { header: c.name.replace(/^@/, ''), binding: c.path, format: f, align: f.startsWith('number') ? 'left' : '' };
+    });
+    const t = createElement('table', { binding: node.path, columns: cols.length ? cols : undefined });
+    if (styleFrom) {
+      // same look as the tables already in the template
+      for (const k of ['style', 'headerStyle', 'footerStyle', 'altRowBackground', 'borderWidth', 'borderColor', 'cellPadding']) {
+        if (styleFrom[k] !== undefined) t[k] = JSON.parse(JSON.stringify(styleFrom[k]));
+      }
+    }
+    return t;
   }
   const e = createElement('field', { binding: node.path });
   e.name = node.name;

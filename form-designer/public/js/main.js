@@ -1,11 +1,11 @@
 // Designer bootstrap: toolbar actions, dialogs, pages, keyboard shortcuts.
 import {
   state, on, emit, change, undo, redo, select, selectedElements, currentPage, uid,
-  newTemplate, loadTemplate, fullTemplate, pageSizeMm, ensureBand,
+  newTemplate, loadTemplate, fullTemplate, pageSizeMm, ensureBand, uniquePlaceholder,
 } from './state.js';
 import './agent.js';
 import { api, keyQuery } from './api.js';
-import { render, addElement, scrollEl } from './canvas.js';
+import { render, addElement, scrollEl, commitPropsEdit } from './canvas.js';
 import { renderProps, pickFile } from './props.js';
 import { renderTree, allValuePaths, arrayPaths } from './datatree.js';
 import { TOOLS, createElement } from './factory.js';
@@ -18,13 +18,23 @@ const $ = (s, r = document) => r.querySelector(s);
 
 // ---------------------------------------------------------------- toast / status
 let toastTimer;
-function toast(msg, kind = '') {
+function toast(msg, kind = '', onUndo = null) {
   const t = $('#toast');
   t.textContent = msg;
+  if (onUndo) {
+    const b = document.createElement('button');
+    b.className = 'toast-undo';
+    b.type = 'button';
+    b.textContent = 'ביטול';
+    b.onclick = () => { onUndo(); t.className = 'toast'; };
+    t.appendChild(b);
+  }
   t.className = 'toast show ' + kind;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.className = 'toast'; }, kind === 'error' ? 6000 : 2800);
+  toastTimer = setTimeout(() => { t.className = 'toast'; }, kind === 'error' ? 6000 : onUndo ? 5000 : 2800);
 }
+
+const pagesText = (n) => (Number(n) === 1 ? 'עמוד אחד' : `${n} עמודים`);
 
 function updateChrome() {
   const t = state.template;
@@ -89,6 +99,10 @@ on((w) => {
   }
   if (w === 'focus-props') document.querySelector('#props input, #props textarea')?.focus();
   if (typeof w === 'string' && w.startsWith('open-band:')) openBand(w.slice(10));
+  if (typeof w === 'string' && w.startsWith('toast:')) {
+    const t = JSON.parse(w.slice(6));
+    toast(t.msg, '', t.undo ? () => undo() : null);
+  }
   updateChrome();
 });
 
@@ -120,7 +134,7 @@ document.querySelector('.tabs').addEventListener('click', (ev) => {
   showTab(b.dataset.tab);
 });
 function showTab(name) {
-  document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x.dataset.tab === name));
+  document.querySelectorAll('.tab').forEach((x) => { x.classList.toggle('on', x.dataset.tab === name); x.setAttribute('aria-selected', String(x.dataset.tab === name)); });
   document.querySelectorAll('.tab-pane').forEach((x) => x.classList.toggle('on', x.dataset.pane === name));
 }
 
@@ -133,7 +147,7 @@ function renderPagesList() {
     const n = b?.elements?.length || 0;
     return `<button class="page-card band-card${state.band === band ? ' on' : ''}" data-band="${band}">
       <span class="page-thumb band-thumb ${band}" style="aspect-ratio:${w}/${h}"><i></i></span>
-      <span class="page-meta">${label}<small>${b && b.enabled !== false ? `${n} רכיבים · ${b.height} מ"מ` : 'לא מוגדרת'}</small></span></button>`;
+      <span class="page-meta">${label}<small>${b && b.enabled !== false ? `${n} רכיבים · ${Number(b.height) || 0} מ"מ` : 'לחצו להוספה'}</small></span></button>`;
   };
   $('#pages-list').innerHTML = bandCard('header', 'כותרת עליונה') + bandCard('footer', 'כותרת תחתונה') + '<div class="pages-sep"></div>' + t.pages.map((p, i) => `
     <button class="page-card${i === state.pageIndex && !state.band ? ' on' : ''}" data-page="${i}">
@@ -142,6 +156,8 @@ function renderPagesList() {
       <span class="page-move"><span data-pmove="${i}:-1" title="הזזה למעלה">▲</span><span data-pmove="${i}:1" title="הזזה למטה">▼</span></span>
     </button>`).join('');
 }
+$('#pages-list').addEventListener('pointerdown', () => commitPropsEdit());
+$('#data-tree').addEventListener('pointerdown', () => commitPropsEdit());
 $('#pages-list').addEventListener('click', (ev) => {
   const mv = ev.target.closest('[data-pmove]');
   if (mv) {
@@ -282,9 +298,17 @@ async function confirmDiscard() {
   if (!state.dirty) return true;
   const r = await openDialog({
     title: 'שינויים שלא נשמרו',
-    html: '<p>בתבנית הנוכחית יש שינויים שלא נשמרו. להמשיך בלי לשמור?</p>',
-    buttons: [{ label: 'ביטול', value: false }, { label: 'המשך בלי לשמור', danger: true, value: true }],
+    html: '<p>בתבנית הנוכחית יש שינויים שלא נשמרו.</p>',
+    buttons: [
+      { label: 'ביטול', value: false },
+      { label: 'המשך בלי לשמור', danger: true, value: true },
+      { label: 'שמירה והמשך', primary: true, value: 'save' },
+    ],
   });
+  if (r === 'save') {
+    await save();
+    return !state.dirty;
+  }
   return !!r;
 }
 
@@ -416,7 +440,7 @@ async function importDialog() {
     });
     gotoPage(append ? state.template.pages.length - info.pages : 0);
     zoomFit();
-    toast(`יובאו ${info.pages} עמודים. הוסיפו שדות מעל הרקע.`, 'ok');
+    toast(`יובא${info.pages === 1 ? ' עמוד אחד' : `ו ${info.pages} עמודים`}. הוסיפו שדות מעל הרקע.`, 'ok');
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -448,7 +472,7 @@ async function previewDialog() {
       url = URL.createObjectURL(blob);
       frame.src = url;
       const warns = JSON.parse(decodeURIComponent(res.headers.get('X-Render-Warnings') || '%5B%5D'));
-      $('#pv-status', body).innerHTML = `${res.headers.get('X-Render-Pages')} עמודים · ${Math.round(performance.now() - t0)} מ"ש` + (warns.length ? ` · <span class="warn" title="${escapeHtml(warns.join('\n'))}">⚠ ${warns.length} אזהרות</span>` : '');
+      $('#pv-status', body).innerHTML = `${pagesText(res.headers.get('X-Render-Pages'))} · ${((performance.now() - t0) / 1000).toFixed(1)} שנ'` + (warns.length ? ` · <span class="warn" title="${escapeHtml(warns.join('\n'))}">⚠ ${warns.length} אזהרות</span>` : '');
       $('#pv-dl', body).onclick = () => download(`${state.template.id || 'preview'}.pdf`, blob);
     } catch (e) {
       $('#pv-status', body).innerHTML = `<span class="warn">${escapeHtml(e.message)}</span>`;
@@ -500,9 +524,9 @@ async function placeholdersDialog() {
   const { templatePlaceholders } = await import('/shared/elements.js');
   const { w, h } = pageSizeMm();
   const list = templatePlaceholders(fullTemplate(), w, h);
-  const rows = list.map((p) => `<tr><td dir="ltr"><code>${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td dir="ltr">${p.mm.x}, ${p.mm.y}</td><td dir="ltr">${p.mm.width} × ${p.mm.height}</td><td dir="ltr">${p.pdf.x}, ${p.pdf.y}</td></tr>`).join('');
+  const rows = list.map((p) => `<tr><td><code dir="ltr">${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'העלאת תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td><bdi>${p.mm.x}, ${p.mm.y}</bdi></td><td><bdi>${p.mm.width} × ${p.mm.height}</bdi></td><td><bdi>${p.pdf.x}, ${p.pdf.y}</bdi></td></tr>`).join('');
   await openDialog({
-    title: 'אזורי חתימה ותמונה (placeholders)',
+    title: 'אזורי חתימה ואזורי העלאת תמונה',
     wide: true,
     html: list.length ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>תווית</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה (מ"מ)</th><th>X, Y (נק' PDF)</th></tr></thead><tbody>${rows}</tbody></table>
       <p class="hint">המיקום במ"מ נמדד מהפינה השמאלית העליונה של הדף. נקודות PDF נמדדות מהפינה השמאלית התחתונה (כמו בספריות חתימה דיגיטלית).<br>
@@ -598,7 +622,10 @@ function copySel() {
 function paste(offset = 5) {
   if (!clipboard) return;
   const copies = clipboard.map((e) => ({ ...JSON.parse(JSON.stringify(e)), id: uid(), x: e.x + offset, y: e.y + offset }));
-  change((t) => currentPage().elements.push(...copies));
+  change(() => {
+    for (const c of copies) if (c.placeholder) c.placeholder = uniquePlaceholder(c.type); // names must stay unique
+    currentPage().elements.push(...copies);
+  });
   clipboard = copies;
   select(copies.map((c) => c.id));
 }
@@ -677,8 +704,10 @@ async function runAction(a) {
       case 'page-dup': {
         const copy = JSON.parse(JSON.stringify(currentPage()));
         copy.id = uid('p');
-        copy.elements.forEach((e) => { e.id = uid(); });
-        change((t) => t.pages.splice(state.pageIndex + 1, 0, copy));
+        change((t) => {
+          copy.elements.forEach((e) => { e.id = uid(); if (e.placeholder) e.placeholder = uniquePlaceholder(e.type); });
+          t.pages.splice(state.pageIndex + 1, 0, copy);
+        });
         gotoPage(state.pageIndex + 1);
         break;
       }
@@ -688,6 +717,7 @@ async function runAction(a) {
         gotoPage(Math.min(state.pageIndex, state.template.pages.length - 1));
         break;
       case 'band-exit': gotoPage(state.pageIndex); break;
+      case 'agent-tab': showTab('agent'); break;
       case 'manage': location.href = '/'; break;
       case 'header': openBand('header'); showTab('pages'); break;
       case 'footer': openBand('footer'); showTab('pages'); break;
@@ -703,12 +733,13 @@ async function runAction(a) {
         if (!f || !(await confirmDiscard())) return;
         const t = JSON.parse(await readFileAsText(f));
         if (!t.pages) throw new Error('הקובץ אינו תבנית תקינה');
-        loadTemplate(t);
+        loadTemplate({ ...t, id: '' });
         state.dirty = true;
+        history.replaceState(null, '', '#');
         await applySchema(t.schema, { silent: true });
         zoomFit();
         updateChrome();
-        toast('התבנית נטענה. לחצו "שמירה" כדי לשמור אותה בשרת.');
+        toast(`התבנית נטענה כתבנית חדשה${t.id ? ` (במקור #${t.id})` : ''}. לחצו "שמירה" ובחרו מספר.`);
         break;
       }
       case 'delete-template': {
@@ -739,6 +770,7 @@ document.addEventListener('click', (ev) => {
   const b = ev.target.closest('[data-action]');
   const menu = $('#menu-pop');
   if (!ev.target.closest('.menu')) menu.hidden = true;
+  if (b && b.closest('.canvas-empty')) { runAction(b.dataset.action); return; }
   if (!b || b.closest('#props') || b.closest('.dlg')) {
     if (b && b.closest('.dlg') && b.dataset.action) { /* handled in dialog */ }
     return;
@@ -796,6 +828,13 @@ async function init() {
 }
 
 window.addEventListener('resize', () => { if (state.template) render(); });
+window.addEventListener('hashchange', async () => {
+  const id = decodeURIComponent(location.hash.slice(1));
+  if (!id || id === state.template?.id) return;
+  if (!(await confirmDiscard())) return;
+  if (id === 'new') { startNew(); state.dirty = false; zoomFit(); renderTree(); updateChrome(); renderProps(); return; }
+  await openTemplate(id).catch((e) => toast(e.message, 'error'));
+});
 init();
 
 export { toast, openDialog };

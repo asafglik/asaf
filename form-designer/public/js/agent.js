@@ -1,12 +1,14 @@
 // Smart design agent panel: automatic layout from a sample PDF, and free-text
 // design requests. Every agent answer is applied as one undoable change.
-import { state, on, emit, change, undo, uid, uniquePlaceholder, ensureBand, allContainers, fullTemplate, select } from './state.js';
+import { state, on, emit, change, undo, undoDepth, uid, uniquePlaceholder, ensureBand, allContainers, fullTemplate, select } from './state.js';
 import { api } from './api.js';
 import { createElement } from './factory.js';
 import { analyzePdf, inspectPdf, ensureBackground } from './pdfimport.js';
 import { fileToBase64 } from './util.js';
 import { escapeHtml } from '/shared/elements.js';
 import { pickFile } from './props.js';
+import { sanitizeRichHtml } from './sanitize.js';
+import { cleanElement } from '/shared/elements.js';
 
 const pane = document.getElementById('agent-pane');
 let status = { available: false };
@@ -24,9 +26,9 @@ const SUGGESTIONS = [
 function render() {
   const hasPdf = !!state.sourcePdf;
   pane.innerHTML = `
-    <div class="ag-status ${status.available ? 'on' : 'off'}">
-      <span class="dot"></span>${status.available ? `הסוכן החכם פעיל` : 'הסוכן החכם לא מוגדר – זמין זיהוי בסיסי בלבד'}
-    </div>
+    ${status.available
+    ? '<div class="ag-status on"><span class="dot"></span>הסוכן החכם פעיל</div>'
+    : '<div class="ag-off"><b>הסוכן החכם עדיין לא הופעל בשרת.</b><br>בינתיים "עיצוב אוטומטי" משתמש בזיהוי בסיסי (שדות טופס ותוויות). להפעלה מלאה פנו למנהל המערכת (הגדרת מפתח Claude API – ראו README).</div>'}
     <section class="ag-card">
       <h3>עיצוב אוטומטי מקובץ דוגמה</h3>
       <p class="hint">הסוכן קורא את ה-PDF (תמונה, טקסטים ושדות טופס קיימים) ואת עולם הנתונים, וממקם לבד שדות, טבלאות, תיבות סימון ואזורי חתימה.</p>
@@ -44,11 +46,11 @@ function render() {
     <section class="ag-card ag-chat-card">
       <h3>בקשות עיצוב</h3>
       <div class="ag-chat" id="ag-chat">
-        ${chat.length ? chat.map(msgHtml).join('') : `<div class="ag-sugg">${SUGGESTIONS.map((s) => `<button class="chip" data-sugg="${escapeHtml(s)}" type="button">${escapeHtml(s)}</button>`).join('')}</div>`}
+        ${chat.length ? chat.map(msgHtml).join('') : `<div class="ag-sugg">${SUGGESTIONS.map((s) => `<button class="chip" data-sugg="${escapeHtml(s)}" type="button"${status.available ? '' : ' disabled aria-disabled="true"'}>${escapeHtml(s)}</button>`).join('')}</div>`}
         ${busy ? '<div class="ag-msg agent busy"><span class="spinner"></span> הסוכן עובד...</div>' : ''}
       </div>
       <div class="ag-input">
-        <textarea id="ag-req" rows="3" placeholder="${status.available ? 'מה לשנות בעיצוב? (Ctrl+Enter לשליחה)' : 'נדרש ANTHROPIC_API_KEY בשרת'}"${status.available ? '' : ' disabled'}></textarea>
+        <textarea id="ag-req" rows="3" placeholder="${status.available ? 'מה לשנות בעיצוב? (Ctrl+Enter לשליחה)' : 'זמין לאחר הפעלת הסוכן החכם'}"${status.available ? '' : ' disabled'}></textarea>
         <button class="btn btn-primary" data-ag="send" type="button"${status.available && !busy ? '' : ' disabled'}>שליחה</button>
       </div>
     </section>`;
@@ -63,8 +65,10 @@ function msgHtml(m, i) {
 }
 
 // ---------------------------------------------------------------- applying operations
+const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function deepMerge(target, src) {
   for (const [k, v] of Object.entries(src)) {
+    if (BAD_KEYS.has(k)) continue;
     if (v && typeof v === 'object' && !Array.isArray(v) && target[k] && typeof target[k] === 'object' && !Array.isArray(target[k])) deepMerge(target[k], v);
     else target[k] = v;
   }
@@ -76,7 +80,9 @@ const TYPES = new Set(['text', 'field', 'computed', 'richtext', 'table', 'image'
 function normalizeElement(raw) {
   if (!TYPES.has(raw.type)) return null;
   const base = createElement(raw.type, { symbology: raw.symbology });
-  const el = deepMerge(base, { ...raw });
+  const el = cleanElement(deepMerge(base, { ...raw }));
+  if (el.type === 'richtext') el.html = sanitizeRichHtml(el.html);
+  if (el.type === 'image' && el.src && !/^data:image\/(png|jpe?g|gif|webp);/i.test(el.src)) el.src = '';
   el.id = uid();
   for (const k of ['x', 'y', 'w', 'h']) el[k] = Math.round((Number(el[k]) || 0) * 10) / 10;
   if (el.type === 'table') el.columns = (el.columns || []).map((c) => ({ id: uid('c'), width: 1, ...c }));
@@ -125,6 +131,8 @@ export function applyOperations(ops, { rebuild = false } = {}) {
         delete e.id;
         if (e.type && e.type !== f.el.type) delete e.type;
         deepMerge(f.el, e);
+        Object.assign(f.el, cleanElement(f.el));
+        if (f.el.type === 'richtext') f.el.html = sanitizeRichHtml(f.el.html);
         n++;
       } else if (o.op === 'delete_element') {
         const f = findById(t, o.id);
@@ -133,13 +141,20 @@ export function applyOperations(ops, { rebuild = false } = {}) {
         n++;
       } else if (o.op === 'set_header' || o.op === 'set_footer') {
         const b = ensureBand(t, o.op === 'set_header' ? 'header' : 'footer');
-        const { elements, ...rest } = e;
-        Object.assign(b, rest);
+        if (e.enabled !== undefined) b.enabled = e.enabled !== false;
+        if (Number.isFinite(Number(e.height))) b.height = Math.max(5, Math.min(200, Number(e.height)));
+        if (['all', 'notFirst', 'firstOnly', 'notLast', 'lastOnly'].includes(e.showOn)) b.showOn = e.showOn;
         n++;
       } else if (o.op === 'set_template') {
-        if (e.name) t.name = e.name;
-        if (e.description) t.description = e.description;
-        if (e.page) t.page = { ...t.page, ...e.page };
+        if (typeof e.name === 'string') t.name = e.name.slice(0, 200);
+        if (typeof e.description === 'string') t.description = e.description.slice(0, 500);
+        if (e.page && typeof e.page === 'object') {
+          const pg = {};
+          if (['A4', 'A5', 'A3', 'Letter', 'Legal', 'custom'].includes(e.page.size)) pg.size = e.page.size;
+          if (['portrait', 'landscape'].includes(e.page.orientation)) pg.orientation = e.page.orientation;
+          for (const k of ['width', 'height']) if (Number(e.page[k]) > 0) pg[k] = Math.min(2000, Number(e.page[k]));
+          t.page = { ...t.page, ...pg };
+        }
         n++;
       }
     }
@@ -163,7 +178,7 @@ async function autoDesign() {
     const pages = await analyzePdf(state.sourcePdf);
     const r = await api.post('/api/ai/auto-design', { template: fullTemplateLite(), tree: state.tree, pages, mode, instructions });
     const applied = r.operations.length ? applyOperations(r.operations, { rebuild: mode === 'rebuild' && !r.heuristic }) : 0;
-    chat.push({ role: 'agent', text: r.message || 'בוצע.', applied, undoable: applied > 0 });
+    chat.push({ role: 'agent', text: r.message || 'בוצע.', applied, undoable: applied > 0, depth: undoDepth() });
   } catch (e) {
     chat.push({ role: 'error', text: e.message });
   } finally {
@@ -211,7 +226,7 @@ async function sendRequest(text) {
       history: chat.filter((m) => m.role === 'user').slice(0, -1).map((m) => m.text),
     });
     const applied = r.operations.length ? applyOperations(r.operations) : 0;
-    chat.push({ role: 'agent', text: r.message || 'בוצע.', applied, undoable: applied > 0 });
+    chat.push({ role: 'agent', text: r.message || 'בוצע.', applied, undoable: applied > 0, depth: undoDepth() });
   } catch (e) {
     chat.push({ role: 'error', text: e.message });
   } finally {
@@ -238,7 +253,16 @@ pane.addEventListener('click', (ev) => {
   else if (b.dataset.sugg) { const ta = document.getElementById('ag-req'); ta.value = b.dataset.sugg; ta.focus(); }
   else if (b.dataset.undo !== undefined) {
     const m = chat[+b.dataset.undo];
-    if (m && m.undoable) { undo(); m.undoable = false; m.text += ' (בוטל)'; render(); }
+    if (!m || !m.undoable) return;
+    if (undoDepth() !== m.depth) {
+      // the user changed things after the agent: undoing now would undo their change instead
+      emit('toast:' + JSON.stringify({ msg: 'אחרי שינויי הסוכן בוצעו שינויים נוספים. בטלו אותם קודם (Ctrl+Z) או בטלו ידנית.' }));
+      return;
+    }
+    undo();
+    m.undoable = false;
+    m.text += ' (בוטל)';
+    render();
   }
 });
 pane.addEventListener('keydown', (ev) => {

@@ -70,7 +70,7 @@ test('rendered placeholders follow pagination and conditions', { skip: !findChro
   assert.equal(sign.length, 1, 'showOn last: only once');
   assert.equal(sign[0].page, pages);
   assert.equal(placeholders.filter((p) => p.name === 'guarantor_sign').length, 0, 'hidden by condition');
-  assert.equal(placeholders.filter((p) => p.name === 'stamp').length, pages, 'footer upload area on every page');
+  assert.equal(placeholders.filter((p) => p.baseName === 'stamp').length, pages, 'footer upload area on every page');
   const withG = await renderPdf(sigTemplate, { rows: [], hasGuarantor: 'true' });
   assert.equal(withG.placeholders.filter((p) => p.name === 'guarantor_sign').length, 1);
 });
@@ -79,8 +79,8 @@ test('header/footer showOn notFirst is applied to the whole document', { skip: !
   const t = JSON.parse(JSON.stringify(sigTemplate));
   t.footer.showOn = 'notFirst';
   const { pages, placeholders } = await renderPdf(t, { rows: Array.from({ length: 120 }, () => ({ a: 'x' })) });
-  assert.equal(placeholders.filter((p) => p.name === 'stamp').length, pages - 1);
-  assert.ok(!placeholders.some((p) => p.name === 'stamp' && p.page === 1));
+  assert.equal(placeholders.filter((p) => p.baseName === 'stamp').length, pages - 1);
+  assert.ok(!placeholders.some((p) => p.baseName === 'stamp' && p.page === 1));
 });
 
 test('duplicate a template', async () => {
@@ -93,7 +93,7 @@ test('duplicate a template', async () => {
 });
 
 test('customers: link templates, customer API key is limited to its templates', async () => {
-  let r = await json('POST', '/api/customers', { name: 'לקוח א', apiKey: 'key-a' });
+  let r = await json('POST', '/api/customers', { name: 'לקוח א', apiKey: 'key-a-0123456789abcdef' });
   const c = await r.json();
   assert.equal(r.status, 201);
   r = await json('PUT', `/api/customers/${c.id}/templates`, { templates: ['2001'] });
@@ -101,10 +101,10 @@ test('customers: link templates, customer API key is limited to its templates', 
   const list = await (await fetch(`${base}/api/customers`)).json();
   assert.deepEqual(list[0].templates, ['2001']);
   // customer key: sees and renders only its own templates, no designer API
-  const mine = await (await fetch(`${base}/api/templates`, { headers: { 'x-api-key': 'key-a' } })).json();
+  const mine = await (await fetch(`${base}/api/templates`, { headers: { 'x-api-key': 'key-a-0123456789abcdef' } })).json();
   assert.deepEqual(mine.map((t) => t.id), ['2001']);
-  assert.equal((await json('POST', '/api/render', { templateId: '1001', data: {} }, { 'x-api-key': 'key-a' })).status, 403);
-  assert.equal((await json('PUT', '/api/templates/2001', {}, { 'x-api-key': 'key-a' })).status, 403);
+  assert.equal((await json('POST', '/api/render', { templateId: '1001', data: {} }, { 'x-api-key': 'key-a-0123456789abcdef' })).status, 403);
+  assert.equal((await json('PUT', '/api/templates/2001', {}, { 'x-api-key': 'key-a-0123456789abcdef' })).status, 403);
   const bundle = await (await fetch(`${base}/api/customers/${c.id}/bundle`)).json();
   assert.equal(bundle.kind, 'form-designer-bundle');
   assert.deepEqual(bundle.templates.map((t) => t.id), ['2001']);
@@ -134,4 +134,13 @@ test('ai status and rule-based auto design without an API key', async () => {
   const api = await (await json('POST', '/api/ai/auto-design', { tree, pages })).json();
   assert.equal(api.operations.length, r.operations.length);
   assert.equal((await json('POST', '/api/ai/request', { request: 'x' })).status, 501);
+});
+
+test('designer save keeps customer links', async () => {
+  const c = await (await json('POST', '/api/customers', { name: 'שומר קישור' })).json();
+  const t = await (await fetch(`${base}/api/templates/2002`)).json();
+  await json('PUT', `/api/customers/${c.id}/templates`, { templates: ['2002'] });
+  await json('PUT', '/api/templates/2002', { ...t, customers: [] }); // stale copy from an open designer tab
+  const again = await (await fetch(`${base}/api/templates/2002`)).json();
+  assert.deepEqual(again.customers, [c.id]);
 });

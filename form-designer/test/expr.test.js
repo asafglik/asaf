@@ -57,7 +57,9 @@ test('syntax errors are reported', () => {
 test('interpolation with formats and page tokens', () => {
   const out = interpolate('{{customer.name}}: {{sum(items, price*qty) | number:2}} {{page}}/{{pages}}', s);
   assert.equal(out, `דני: 36.50 ${PAGE_TOKENS.page}/${PAGE_TOKENS.pages}`);
-  assert.equal(interpolate('{{ vat | percent }}', s), '17%');
+  assert.equal(interpolate('{{ vat | pct }}', s), '17%');
+  assert.equal(interpolate('{{ 0.5 | percent }}', s), '50%');
+  assert.equal(interpolate('{{ 2 | percent }}', s), '200%');
   assert.equal(interpolate('{{ bad( }}', s), '#שגיאה');
 });
 

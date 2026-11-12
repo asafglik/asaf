@@ -4,6 +4,7 @@
 // so deploying a template to a client server is copying that one file.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { config } from './config.js';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -85,7 +86,9 @@ export function saveTemplate(id, template) {
   if (fs.existsSync(f) && config.historyLimit > 0) {
     const hdir = path.join(dir(), '.history', String(id));
     fs.mkdirSync(hdir, { recursive: true });
-    fs.copyFileSync(f, path.join(hdir, `${Date.now()}.json`));
+    let stamp = Date.now();
+    while (fs.existsSync(path.join(hdir, `${stamp}.json`))) stamp++;
+    fs.copyFileSync(f, path.join(hdir, `${stamp}.json`));
     const old = fs.readdirSync(hdir).sort();
     for (const o of old.slice(0, Math.max(0, old.length - config.historyLimit))) fs.rmSync(path.join(hdir, o));
   }
@@ -146,12 +149,33 @@ function customersFile() {
   return path.join(config.storageDir, 'customers.json');
 }
 
+const hashKey = (k) => crypto.createHash('sha256').update(String(k)).digest('hex');
+
 export function listCustomers() {
+  let list;
   try {
-    return JSON.parse(fs.readFileSync(customersFile(), 'utf8'));
+    list = JSON.parse(fs.readFileSync(customersFile(), 'utf8'));
   } catch {
     return [];
   }
+  // migrate keys saved in plain text by older versions
+  if (list.some((c) => c.apiKey)) {
+    for (const c of list) {
+      if (c.apiKey) { c.apiKeyHash = hashKey(c.apiKey); c.apiKeyHint = String(c.apiKey).slice(-4); delete c.apiKey; }
+    }
+    writeCustomers(list);
+  }
+  return list;
+}
+
+/** Customer as shown by the API: never the key hash. */
+export function publicCustomer(c) {
+  const { apiKeyHash, ...rest } = c;
+  return { ...rest, hasApiKey: !!apiKeyHash };
+}
+
+export function hasCustomerKeys() {
+  return listCustomers().some((c) => c.apiKeyHash);
 }
 
 function writeCustomers(list) {
@@ -171,19 +195,29 @@ export function saveCustomer(data) {
   const name = String(data.name || '').trim();
   if (!name) throw Object.assign(new Error('חסר שם לקוח'), { status: 400 });
   let c = data.id ? list.find((x) => x.id === String(data.id)) : null;
-  const fields = ['name', 'code', 'contact', 'email', 'phone', 'notes', 'apiKey'];
+  const fields = ['name', 'code', 'contact', 'email', 'phone', 'notes'];
   if (c) {
-    for (const k of fields) if (k in data) c[k] = data[k] == null ? '' : String(data[k]);
+    for (const k of fields) if (k in data) c[k] = data[k] == null ? '' : String(data[k]).slice(0, 500);
     c.name = name;
     c.updatedAt = new Date().toISOString();
   } else {
     const nums = list.map((x) => parseInt(x.id, 10)).filter(Number.isFinite);
     c = { id: String(nums.length ? Math.max(...nums) + 1 : 1), createdAt: new Date().toISOString() };
-    for (const k of fields) c[k] = data[k] == null ? '' : String(data[k]);
+    for (const k of fields) c[k] = data[k] == null ? '' : String(data[k]).slice(0, 500);
     c.name = name;
     list.push(c);
   }
-  if (c.apiKey && list.some((x) => x !== c && x.apiKey === c.apiKey)) throw Object.assign(new Error('מפתח ה-API כבר בשימוש אצל לקוח אחר'), { status: 409 });
+  // the key itself is never stored: only its hash and last 4 characters
+  if (data.removeApiKey) { delete c.apiKeyHash; delete c.apiKeyHint; }
+  if (data.apiKey) {
+    const key = String(data.apiKey).trim();
+    if (key.length < 16) throw Object.assign(new Error('מפתח API חייב להכיל לפחות 16 תווים'), { status: 400 });
+    if (config.apiKey && key === config.apiKey) throw Object.assign(new Error('אי אפשר להשתמש במפתח המנהל כמפתח לקוח'), { status: 400 });
+    const h = hashKey(key);
+    if (list.some((x) => x !== c && x.apiKeyHash === h)) throw Object.assign(new Error('מפתח ה-API כבר בשימוש אצל לקוח אחר'), { status: 409 });
+    c.apiKeyHash = h;
+    c.apiKeyHint = key.slice(-4);
+  }
   writeCustomers(list);
   return c;
 }
@@ -203,7 +237,18 @@ export function deleteCustomer(id) {
 
 export function customerByApiKey(key) {
   if (!key) return null;
-  return listCustomers().find((c) => c.apiKey && c.apiKey === key) || null;
+  const h = Buffer.from(hashKey(key), 'hex');
+  return listCustomers().find((c) => c.apiKeyHash && crypto.timingSafeEqual(Buffer.from(c.apiKeyHash, 'hex'), h)) || null;
+}
+
+/** Install a customer (with its key hash) from a bundle on a render server. */
+export function importCustomer(c) {
+  const list = listCustomers();
+  const existing = list.find((x) => x.id === String(c.id));
+  const rec = { id: String(c.id), name: String(c.name || ''), code: String(c.code || ''), apiKeyHash: c.apiKeyHash || undefined, apiKeyHint: c.apiKeyHint || undefined };
+  if (existing) Object.assign(existing, rec);
+  else list.push(rec);
+  writeCustomers(list);
 }
 
 /** Set which templates belong to a customer. */

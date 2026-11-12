@@ -1,5 +1,6 @@
 // Designer state, undo/redo history and change notifications.
 import { PAGE_SIZES } from '/shared/elements.js';
+import { sanitizeTemplateHtml } from './sanitize.js';
 
 const listeners = new Set();
 
@@ -67,6 +68,8 @@ export function redo() {
 }
 
 export function canUndo() { return undoStack.length > 0; }
+/** Number of changes in the undo history (to know if a later change happened). */
+export function undoDepth() { return undoStack.length; }
 export function canRedo() { return redoStack.length > 0; }
 
 export function resetHistory() {
@@ -161,7 +164,7 @@ export function newTemplate(id = '') {
 }
 
 export function loadTemplate(t) {
-  const copy = JSON.parse(JSON.stringify(t));
+  const copy = sanitizeTemplateHtml(JSON.parse(JSON.stringify(t)));
   state.sourcePdf = copy.sourcePdf || null;
   delete copy.sourcePdf;
   if (!copy.pages || !copy.pages.length) copy.pages = [{ id: uid('p'), elements: [] }];

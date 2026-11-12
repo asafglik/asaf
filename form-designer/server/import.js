@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import mammoth from 'mammoth';
 import { config } from './config.js';
+import { sanitizeRichHtml } from './sanitize.js';
 
 export async function docxToHtml(buffer) {
   const result = await mammoth.convertToHtml(
@@ -21,7 +22,7 @@ export async function docxToHtml(buffer) {
       ],
     },
   );
-  return { html: result.value, messages: result.messages.map((m) => m.message) };
+  return { html: sanitizeRichHtml(result.value), messages: result.messages.map((m) => m.message).slice(0, 20) };
 }
 
 export function findSoffice() {
@@ -45,7 +46,15 @@ export function findSoffice() {
   }) || null;
 }
 
-export async function officeToPdf(buffer, ext = 'docx') {
+let officeBusy = Promise.resolve();
+/** LibreOffice conversions run one at a time. */
+export function officeToPdf(buffer, ext) {
+  const run = officeBusy.then(() => convert(buffer, ext));
+  officeBusy = run.catch(() => {});
+  return run;
+}
+
+async function convert(buffer, ext = 'docx') {
   const soffice = findSoffice();
   if (!soffice) throw Object.assign(new Error('LibreOffice לא מותקן בשרת - אפשר לייבא את הקובץ כטקסט עשיר, או להמיר ל-PDF ולייבא את ה-PDF'), { status: 501 });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-import-'));

@@ -48,3 +48,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .check-list label:hover { background: var(--panel-2); }
 .check-list .t-id { font-weight: 700; color: var(--accent); min-width: 48px; }
 .dlg-body .f > span:first-child { flex-basis: 110px; }
+
+.more-pop { inset-inline-end: auto; top: auto; z-index: 50; }
+.more-pop hr { border: 0; border-top: 1px solid var(--line-2); margin: 4px 0; }
+.mtable-wrap { overflow-x: auto; overflow-y: visible; }
+.dlg-body .f-col > span:first-child { margin-bottom: 0; }

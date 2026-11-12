@@ -3,6 +3,7 @@
 //   mode "render" : render API only (install on client servers)
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import express from 'express';
 import { config, ROOT } from './config.js';
 import * as store from './storage.js';
@@ -14,6 +15,7 @@ import { docxToHtml, officeToPdf, findSoffice } from './import.js';
 import { templatePlaceholders } from '../shared/elements.js';
 import { pageSize } from './render/html.js';
 import { autoDesign, designRequest, aiAvailable } from './ai.js';
+import { sanitizeTemplate } from './sanitize.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -23,18 +25,25 @@ const full = config.mode !== 'render';
 // FD_API_KEY = admin key (designer + everything). A customer's own API key
 // (set in the management screen) can only render / read that customer's templates.
 function requestKey(req) {
-  return req.get('x-api-key') || req.query.apiKey || (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  return req.get('x-api-key') || (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+}
+
+const sha = (v) => crypto.createHash('sha256').update(String(v)).digest();
+function isAdminKey(k) {
+  return !!(config.apiKey && k && crypto.timingSafeEqual(sha(k), sha(config.apiKey)));
 }
 
 function apiKey(req, res, next) {
   const k = requestKey(req);
-  if (config.apiKey && k === config.apiKey) return next();
+  if (isAdminKey(k)) return next();
   const customer = k ? store.customerByApiKey(k) : null;
   if (customer) {
     req.customer = customer;
     return next();
   }
-  if (!config.apiKey) return next();
+  // no admin key configured: open access, except on a render server that has
+  // customer keys installed - there a customer key is always required
+  if (!config.apiKey && !(config.mode === 'render' && store.hasCustomerKeys())) return next();
   res.status(401).json({ error: 'נדרש מפתח API תקין (כותרת x-api-key)' });
 }
 
@@ -106,7 +115,10 @@ app.post('/api/render', apiKey, jsonBody, asyncH(async (req, res) => {
 }));
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, mode: config.mode, chrome: findChrome() || null, libreoffice: full ? findSoffice() : undefined, templates: store.listTemplates().length });
+  const chrome = !!findChrome();
+  // details only for the admin (or an open server without keys)
+  if (!isAdminKey(requestKey(req)) && config.apiKey) return res.json({ ok: chrome, mode: config.mode });
+  res.json({ ok: chrome, mode: config.mode, chrome: findChrome() || null, libreoffice: full ? findSoffice() : undefined, templates: store.listTemplates().length, ai: aiAvailable() });
 });
 
 app.get('/api/templates', apiKey, (req, res) => {
@@ -122,14 +134,43 @@ app.get('/api/templates/:id/placeholders', apiKey, (req, res) => {
   res.json({ templateId: t.id, page: { width, height, unit: 'mm' }, placeholders: templatePlaceholders(t, width, height) });
 });
 app.get('/api/templates/:id', apiKey, (req, res) => {
-  const t = store.getTemplate(req.params.id);
+  let t = store.getTemplate(req.params.id);
   checkCustomerAccess(req, t);
+  if (req.customer) t = { ...t, customers: undefined, schema: t.schema ? { ...t.schema, sample: undefined } : null };
   if (req.query.download) res.set('Content-Disposition', `attachment; filename="template-${t.id}.json"`);
   res.json(t);
 });
 
 // ------------------------------------------------------------- designer API
 if (full) {
+  // designer helpers (no secrets): barcode preview images and fonts
+  app.get('/api/fonts', (req, res) => res.json(listFonts()));
+  app.get('/api/symbologies', (req, res) => res.json(SYMBOLOGIES));
+  app.get('/fonts.css', (req, res) => {
+    res.type('text/css').set('Cache-Control', 'no-cache').send(fontsCssForWeb());
+  });
+  app.get('/fonts/:kind/:file', (req, res) => {
+    const f = resolveFontFile(req.params.kind, req.params.file);
+    if (!f) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=86400').sendFile(f);
+  });
+  
+  app.get('/api/barcode', (req, res) => {
+    try {
+      if (String(req.query.text || '').length > 1000) return res.status(400).type('text/plain').send('text too long');
+      const svg = barcodeSvg({
+        symbology: String(req.query.type || 'code128'),
+        text: String(req.query.text || ''),
+        showText: req.query.showText !== '0',
+        color: String(req.query.color || '#000000'),
+        rotate: String(req.query.rotate || 'N'),
+      });
+      res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+    } catch (e) {
+      res.status(400).type('text/plain').send(e.message);
+    }
+  });
+
   app.use('/api', apiKey, adminOnly, jsonBody);
 
   app.post('/api/templates', (req, res) => {
@@ -137,11 +178,14 @@ if (full) {
     let id = t.id !== undefined && t.id !== '' ? String(t.id) : store.nextId();
     if (!store.validId(id)) return res.status(400).json({ error: 'מספר תבנית יכול להכיל ספרות, אותיות לועזיות, - ו-_' });
     if (store.templateExists(id) && req.query.overwrite !== '1') return res.status(409).json({ error: `תבנית ${id} כבר קיימת` });
-    res.status(201).json(withPlaceholders(store.saveTemplate(id, t)));
+    res.status(201).json(withPlaceholders(store.saveTemplate(id, sanitizeTemplate(t))));
   });
 
   app.put('/api/templates/:id', (req, res) => {
-    res.json(withPlaceholders(store.saveTemplate(req.params.id, req.body || {})));
+    const body = { ...(req.body || {}) };
+    // customer links are managed by their own endpoints: a design save keeps the stored ones
+    body.customers = store.templateExists(req.params.id) ? store.getTemplate(req.params.id).customers || [] : [];
+    res.json(withPlaceholders(store.saveTemplate(req.params.id, sanitizeTemplate(body))));
   });
 
   app.post('/api/templates/:id/duplicate', (req, res) => {
@@ -152,20 +196,22 @@ if (full) {
   // only the customer links of a template (from the management screen)
   app.put('/api/templates/:id/customers', (req, res) => {
     const t = store.getTemplate(req.params.id);
-    const ids = (req.body?.customers || []).map(String);
+    if (!Array.isArray(req.body?.customers)) return res.status(400).json({ error: 'customers חייב להיות רשימה' });
+    const ids = req.body.customers.map(String);
     res.json(withPlaceholders(store.saveTemplate(t.id, { ...t, customers: ids })));
   });
 
   // ---- customers
   app.get('/api/customers', (req, res) => {
     const templates = store.listTemplates();
-    res.json(store.listCustomers().map((c) => ({ ...c, templates: templates.filter((t) => t.customers.includes(c.id)).map((t) => t.id) })));
+    res.json(store.listCustomers().map((c) => ({ ...store.publicCustomer(c), templates: templates.filter((t) => t.customers.includes(c.id)).map((t) => t.id) })));
   });
-  app.post('/api/customers', (req, res) => res.status(201).json(store.saveCustomer({ ...(req.body || {}), id: undefined })));
-  app.put('/api/customers/:id', (req, res) => res.json(store.saveCustomer({ ...(req.body || {}), id: req.params.id })));
+  app.post('/api/customers', (req, res) => res.status(201).json(store.publicCustomer(store.saveCustomer({ ...(req.body || {}), id: undefined }))));
+  app.put('/api/customers/:id', (req, res) => res.json(store.publicCustomer(store.saveCustomer({ ...(req.body || {}), id: req.params.id }))));
   app.delete('/api/customers/:id', (req, res) => { store.deleteCustomer(req.params.id); res.json({ ok: true }); });
   app.put('/api/customers/:id/templates', (req, res) => {
-    store.setCustomerTemplates(req.params.id, req.body?.templates || []);
+    if (!Array.isArray(req.body?.templates)) return res.status(400).json({ error: 'templates חייב להיות רשימה' });
+    store.setCustomerTemplates(req.params.id, req.body.templates);
     res.json({ ok: true });
   });
   // installation bundle for a client server: all the customer's templates in one file
@@ -173,7 +219,8 @@ if (full) {
     const c = store.getCustomer(req.params.id);
     const templates = store.listTemplates().filter((t) => t.customers.includes(c.id)).map((t) => store.getTemplate(t.id));
     res.set('Content-Disposition', `attachment; filename="bundle-customer-${c.id}.json"`);
-    res.json({ kind: 'form-designer-bundle', version: 1, createdAt: new Date().toISOString(), customer: { id: c.id, name: c.name, code: c.code }, templates });
+    // the key hash lets the client's render server accept that customer's key (the key itself is never stored)
+    res.json({ kind: 'form-designer-bundle', version: 1, createdAt: new Date().toISOString(), customer: { id: c.id, name: c.name, code: c.code, apiKeyHash: c.apiKeyHash, apiKeyHint: c.apiKeyHint }, templates });
   });
 
   // ---- smart design agent
@@ -221,7 +268,8 @@ if (full) {
   app.post('/api/import/docx', asyncH(async (req, res) => {
     const { dataBase64, mode, fileName } = req.body || {};
     if (!dataBase64) return res.status(400).json({ error: 'חסר קובץ' });
-    const buf = Buffer.from(dataBase64, 'base64');
+    const buf = Buffer.from(String(dataBase64), 'base64');
+    if (buf.length > config.maxImportBytes) return res.status(413).json({ error: 'הקובץ גדול מדי' });
     const ext = path.extname(fileName || '').slice(1).toLowerCase() || 'docx';
     if (mode === 'pdf') {
       const pdf = await officeToPdf(buf, ext);
@@ -234,32 +282,6 @@ if (full) {
   app.post('/api/fonts', (req, res) => res.json(saveUploadedFont(req.body || {})));
   app.delete('/api/fonts/:family', (req, res) => res.json(deleteUploadedFont(req.params.family)));
 }
-
-app.get('/api/fonts', (req, res) => res.json(listFonts()));
-app.get('/api/symbologies', (req, res) => res.json(SYMBOLOGIES));
-app.get('/fonts.css', (req, res) => {
-  res.type('text/css').set('Cache-Control', 'no-cache').send(fontsCssForWeb());
-});
-app.get('/fonts/:kind/:file', (req, res) => {
-  const f = resolveFontFile(req.params.kind, req.params.file);
-  if (!f) return res.status(404).end();
-  res.set('Cache-Control', 'public, max-age=86400').sendFile(f);
-});
-
-app.get('/api/barcode', (req, res) => {
-  try {
-    const svg = barcodeSvg({
-      symbology: String(req.query.type || 'code128'),
-      text: String(req.query.text || ''),
-      showText: req.query.showText !== '0',
-      color: String(req.query.color || '#000000'),
-      rotate: String(req.query.rotate || 'N'),
-    });
-    res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
-  } catch (e) {
-    res.status(400).type('text/plain').send(e.message);
-  }
-});
 
 // ------------------------------------------------------------- static designer
 if (full) {
@@ -274,7 +296,9 @@ if (full) {
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   const status = err.status || (err.type === 'entity.too.large' ? 413 : err.type === 'entity.parse.failed' ? 400 : 500);
   if (status >= 500) console.error(err);
-  res.status(status).json({ error: err.message || 'שגיאה' });
+  // messages of errors we raise ourselves (with a status) are meant for the user; others may leak internals
+  const msg = err.status || status < 500 ? err.message || 'שגיאה' : 'שגיאה פנימית בשרת';
+  res.status(status).json({ error: msg });
 });
 
 export function start(port = config.port) {
@@ -285,6 +309,7 @@ export function start(port = config.port) {
     console.log(`  storage: ${config.storageDir}`);
     console.log(`  browser: ${chrome || 'NOT FOUND - set CHROME_PATH'}`);
     if (config.apiKey) console.log('  API key: required');
+    else console.warn('  WARNING: FD_API_KEY is not set - the API is open to anyone who can reach this port' + (config.mode === 'render' && store.hasCustomerKeys() ? ' (customer keys are still required for rendering)' : ''));
   });
   const stop = async () => {
     server.close();

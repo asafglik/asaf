@@ -160,7 +160,7 @@ function parse(src) {
       return { k: 'id', name: tk.v };
     }
     if (tk.t === 'eof') throw new ExprError('ביטוי לא שלם');
-    throw new ExprError(`ציפיתי לערך ולא '${tk.v}'`);
+    throw new ExprError(`חסר ערך לפני '${tk.v}'`);
   }
 
   function parsePostfix(node) {
@@ -186,6 +186,7 @@ function parse(src) {
 
 const cache = new Map();
 export function compile(src) {
+  if (src.length > 4000) throw new ExprError('ביטוי ארוך מדי');
   let ast = cache.get(src);
   if (!ast) {
     ast = parse(src);
@@ -203,7 +204,11 @@ export function makeScope(vars, parent = null) {
 function lookup(scope, name) {
   for (let s = scope; s; s = s.parent) {
     const v = s.vars;
-    if (v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, name)) return v[name];
+    if (v && typeof v === 'object') {
+      if (Object.prototype.hasOwnProperty.call(v, name)) return v[name];
+      // XML attribute of the current row: code -> @code
+      if (name[0] !== '@' && name[0] !== '$' && Object.prototype.hasOwnProperty.call(v, '@' + name)) return v['@' + name];
+    }
   }
   return undefined;
 }
@@ -244,12 +249,23 @@ function truthy(v) {
   return !!v;
 }
 
+// the same set of "checked" values the checkbox element uses
+export function isTrueValue(v) {
+  v = scalar(v);
+  return v === true || v === 1 || ['true', '1', 'y', 'yes', 'כן', 'x', 'v', '✓'].includes(String(v ?? '').trim().toLowerCase());
+}
+
+const DATE_RE = /^(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})([ T]\d{1,2}:\d{2}(:\d{2})?)?$/;
+const isDateLike = (v) => v instanceof Date || (typeof v === 'string' && DATE_RE.test(v.trim()));
+
 function equals(a, b) {
   a = scalar(a);
   b = scalar(b);
   if ((a === null || a === undefined || a === '') && (b === null || b === undefined || b === '')) return true;
   if (isNumeric(a) && isNumeric(b)) return toNumber(a) === toNumber(b);
-  if (typeof a === 'boolean' || typeof b === 'boolean') return truthy(a) === truthy(b);
+  if (typeof a === 'boolean') return a === isTrueValue(b);
+  if (typeof b === 'boolean') return b === isTrueValue(a);
+  if (isDateLike(a) && isDateLike(b)) return (parseDate(a)?.getTime() ?? NaN) === (parseDate(b)?.getTime() ?? NaN);
   return valueToString(a) === valueToString(b);
 }
 
@@ -257,7 +273,7 @@ function compare(a, b) {
   a = scalar(a);
   b = scalar(b);
   if ((isNumeric(a) || typeof a === 'number') && (isNumeric(b) || typeof b === 'number')) return toNumber(a) - toNumber(b);
-  if (a instanceof Date || b instanceof Date) {
+  if (isDateLike(a) && isDateLike(b)) {
     const da = parseDate(a);
     const db = parseDate(b);
     return (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
@@ -298,22 +314,24 @@ function mapItems(args, scope, fname) {
   return list.map((it, i) => evaluate(args[1], itemScope(scope, it, i)));
 }
 
+function minMax(args, scope, which) {
+  const f = which === 'min' ? Math.min : Math.max;
+  if (!args.length) return 0;
+  const first = evaluate(args[0], scope);
+  const listMode = args.length === 1 || (args.length === 2 && Array.isArray(first));
+  const vals = listMode ? mapItems(args, scope, which).map(num) : args.map((a) => num(evaluate(a, scope)));
+  return vals.length ? vals.reduce((m, v) => f(m, v)) : 0;
+}
+
 const LAZY = {
   sum: (args, scope) => mapItems(args, scope, 'sum').reduce((a, v) => a + num(v), 0),
   avg: (args, scope) => {
     const l = mapItems(args, scope, 'avg');
     return l.length ? l.reduce((a, v) => a + num(v), 0) / l.length : 0;
   },
-  min: (args, scope) => {
-    if (args.length !== 1 && args.length !== 2) return Math.min(...args.map((a) => num(evaluate(a, scope))));
-    const l = mapItems(args, scope, 'min').map(num);
-    return l.length ? Math.min(...l) : 0;
-  },
-  max: (args, scope) => {
-    if (args.length !== 1 && args.length !== 2) return Math.max(...args.map((a) => num(evaluate(a, scope))));
-    const l = mapItems(args, scope, 'max').map(num);
-    return l.length ? Math.max(...l) : 0;
-  },
+  // min(list), min(list, itemExpr) or min(a, b, ...)
+  min: (args, scope) => minMax(args, scope, 'min'),
+  max: (args, scope) => minMax(args, scope, 'max'),
   count: (args, scope) => {
     const list = asList(evaluate(args[0], scope));
     if (args.length < 2) return list.length;
@@ -464,9 +482,9 @@ export function evaluate(node, scope) {
       throw new ExprError('אופרטור לא מוכר ' + node.op);
     }
     case 'call': {
-      const lazy = LAZY[node.name];
+      const lazy = Object.hasOwn(LAZY, node.name) ? LAZY[node.name] : null;
       if (lazy) return lazy(node.args, scope);
-      const fn = FUNCS[node.name];
+      const fn = Object.hasOwn(FUNCS, node.name) ? FUNCS[node.name] : null;
       if (!fn) throw new ExprError(`פונקציה לא מוכרת: ${node.name}`);
       return fn(...node.args.map((a) => evaluate(a, scope)));
     }
@@ -519,7 +537,7 @@ export const PAGE_TOKENS = { page: '\u0000PAGE\u0000', pages: '\u0000PAGES\u0000
  * Replace {{...}} placeholders. Returns a string; page/pages tokens are left
  * as markers that the paginator fills in later. onError receives errors.
  */
-export function interpolate(text, scope, { escape = (x) => x, escapeValue = escape, onError } = {}) {
+export function interpolate(text, scope, { escape = (x) => x, escapeValue = escape, onError, html = false } = {}) {
   if (!text) return '';
   let out = '';
   let last = 0;
@@ -528,7 +546,8 @@ export function interpolate(text, scope, { escape = (x) => x, escapeValue = esca
   while ((m = re.exec(text))) {
     out += escape(text.slice(last, m.index));
     last = re.lastIndex;
-    let inner = m[1].replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    // in rich text the expression may contain formatting tags and entities; plain text is used as is
+    let inner = html ? m[1].replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') : m[1];
     if (inner.startsWith('=')) inner = inner.slice(1);
     const [expr, fmt] = splitFormat(inner);
     if (expr === 'page' || expr === 'pages') {
@@ -545,6 +564,18 @@ export function interpolate(text, scope, { escape = (x) => x, escapeValue = esca
   }
   out += escape(text.slice(last));
   return out;
+}
+
+/** A data path as an expression: segments that are not identifiers use ["..."] (first-name, Total Sum, 2nd). */
+const SEG = /^[\p{L}_$@#][\p{L}\p{N}_$@#]*$/u;
+export function exprPath(path, root = '$root') {
+  return String(path).split('.').reduce((acc, s, i) => {
+    const idx = /^(.*?)((\[\d+\])*)$/.exec(s); // keep [0] indexes
+    const name = idx[1];
+    const tail = idx[2];
+    if (SEG.test(name) || name === '') return (i ? `${acc}.${name}` : name) + tail;
+    return `${i ? acc : root}["${name.replace(/["\\]/g, '\\$&')}"]${tail}`;
+  }, '');
 }
 
 export function scopeFor(data) {

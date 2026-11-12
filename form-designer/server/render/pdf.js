@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { config } from '../config.js';
 import { paginate } from './paginate.js';
 import { buildDocumentHtml } from './html.js';
@@ -67,12 +67,17 @@ async function getBrowser() {
   }
   const executablePath = findChrome();
   if (!executablePath) {
-    throw new Error('לא נמצא דפדפן Chrome/Chromium/Edge בשרת. התקינו Chrome או הגדירו CHROME_PATH.');
+    throw Object.assign(new Error('לא נמצא דפדפן Chrome/Chromium/Edge בשרת. התקינו Chrome או הגדירו CHROME_PATH.'), { status: 503 });
   }
   browserPromise = puppeteer.launch({
     executablePath,
     headless: true,
-    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--font-render-hinting=none', '--disable-extensions'],
+    args: [
+      '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--font-render-hinting=none', '--disable-extensions',
+      '--disable-background-networking', '--disable-sync', '--no-first-run', '--disable-webrtc',
+      // no route to any network (including WebSocket / loopback) unless remote images are allowed
+      ...(config.allowRemoteImages ? [] : ['--proxy-server=127.0.0.1:9', '--proxy-bypass-list=<-loopback>']),
+    ],
   });
   const b = await browserPromise;
   b.on('disconnected', () => { browserPromise = null; });
@@ -91,22 +96,20 @@ export async function closeBrowser() {
 let active = 0;
 const waiting = [];
 async function acquire() {
-  if (active < config.maxConcurrent) { active++; return; }
-  await new Promise((r) => waiting.push(r));
-  active++;
-}
-function release() {
-  active--;
-  const n = waiting.shift();
-  if (n) n();
+  if (active < config.maxConcurrent && !waiting.length) { active++; return; }
+  if (waiting.length >= config.maxQueue) throw Object.assign(new Error('השרת עמוס, נסו שוב בעוד רגע'), { status: 503 });
+  await new Promise((r) => waiting.push(r)); // the slot is handed over by release()
 }
 
-async function htmlToPdf(html, width, height) {
+/** Run fn(page) on a fresh tab with scripts off, closing it after at most renderTimeoutMs. */
+async function withPage(width, height, fn) {
   await acquire();
   let page;
+  let timer;
   try {
     const browser = await getBrowser();
     page = await browser.newPage();
+    await page.setJavaScriptEnabled(false);
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const u = req.url();
@@ -114,9 +117,30 @@ async function htmlToPdf(html, width, height) {
       else req.abort();
     });
     await page.setViewport({ width: Math.ceil(width * 3.78) + 2, height: Math.ceil(height * 3.78) + 2 });
-    await page.setContent(html, { waitUntil: 'load', timeout: 60000 });
+    const deadline = new Promise((_, rej) => {
+      timer = setTimeout(() => rej(Object.assign(new Error('זמן ההפקה חרג מהמותר'), { status: 504 })), config.renderTimeoutMs);
+    });
+    return await Promise.race([fn(page), deadline]);
+  } finally {
+    clearTimeout(timer);
+    if (page) {
+      const closed = await Promise.race([page.close().then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 5000))]);
+      if (!closed) await closeBrowser(); // stuck tab: restart the browser
+    }
+    release();
+  }
+}
+function release() {
+  const n = waiting.shift();
+  if (n) n(); // hand the slot to the next waiter (active stays the same)
+  else active--;
+}
+
+async function htmlToPdf(html, width, height) {
+  return withPage(width, height, async (page) => {
+    await page.setContent(html, { waitUntil: 'load', timeout: config.renderTimeoutMs });
     await page.evaluate(() => document.fonts.ready.then(() => true));
-    const { map, placeholders } = await page.evaluate(paginate);
+    const { map, placeholders, warnings } = await page.evaluate(paginate);
     const pdf = await page.pdf({
       width: `${width}mm`,
       height: `${height}mm`,
@@ -124,13 +148,10 @@ async function htmlToPdf(html, width, height) {
       omitBackground: true,
       preferCSSPageSize: true,
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
-      timeout: 120000,
+      timeout: config.renderTimeoutMs,
     });
-    return { pdf: Buffer.from(pdf), map, placeholders };
-  } finally {
-    if (page) await page.close().catch(() => {});
-    release();
-  }
+    return { pdf: Buffer.from(pdf), map, placeholders, warnings };
+  });
 }
 
 const PT = 72 / 25.4;
@@ -150,12 +171,26 @@ async function mergeBackgrounds(template, overlayBytes, map, width, height) {
     const bg = tpl.background;
     const page = out.addPage([w, h]);
     if (bg && bg.type === 'pdf' && bg.pageIndex < src.getPageCount()) {
-      let emb = bgCache.get(bg.pageIndex);
-      if (!emb) {
-        [emb] = await out.embedPdf(src, [bg.pageIndex]);
-        bgCache.set(bg.pageIndex, emb);
+      let cached = bgCache.get(bg.pageIndex);
+      if (cached === undefined) {
+        const sp = src.getPage(bg.pageIndex);
+        if (!sp.node.Contents()) cached = null; // blank source page: nothing to draw
+        else {
+          // only the visible (crop) area, and honour the page rotation like PDF viewers do
+          const cb = sp.getCropBox();
+          const emb = await out.embedPage(sp, { left: cb.x, bottom: cb.y, right: cb.x + cb.width, top: cb.y + cb.height });
+          cached = { emb, rot: ((sp.getRotation().angle % 360) + 360) % 360 };
+        }
+        bgCache.set(bg.pageIndex, cached);
       }
-      page.drawPage(emb, { x: 0, y: 0, width: w, height: h });
+      if (cached) {
+        const { emb, rot } = cached;
+        const place = rot === 90 ? { x: 0, y: h, width: h, height: w, rotate: degrees(-90) }
+          : rot === 180 ? { x: w, y: h, width: w, height: h, rotate: degrees(180) }
+            : rot === 270 ? { x: w, y: 0, width: h, height: w, rotate: degrees(90) }
+              : { x: 0, y: 0, width: w, height: h };
+        page.drawPage(emb, place);
+      }
     }
     page.drawPage(ovPages[i], { x: 0, y: 0, width: w, height: h });
   }
@@ -171,10 +206,11 @@ export async function renderPdf(template, data, { format } = {}) {
     ? parseData(String(data), { format, arrays: template.schema?.arrays || [] })
     : data || {};
   const { html, errors, width, height } = buildDocumentHtml(template, obj);
-  const { pdf, map, placeholders: phMm } = await htmlToPdf(html, width, height);
+  const { pdf, map, placeholders: phMm, warnings } = await htmlToPdf(html, width, height);
+  errors.push(...warnings);
   // positions in mm (top-left origin) and in PDF points (bottom-left origin)
   const placeholders = phMm.map((p) => ({
-    name: p.name, type: p.type, label: p.label, required: p.required, page: p.page,
+    name: p.name, baseName: p.baseName, type: p.type, label: p.label, required: p.required, page: p.page,
     mm: { x: p.x, y: p.y, width: p.width, height: p.height },
     pdf: { x: +(p.x * PT).toFixed(2), y: +((height - p.y - p.height) * PT).toFixed(2), width: +(p.width * PT).toFixed(2), height: +(p.height * PT).toFixed(2) },
   }));
@@ -200,23 +236,13 @@ export async function renderPageImage(template, data, pageIndex = 0) {
   const obj = typeof data === 'string' ? parseData(data, { arrays: template.schema?.arrays || [] }) : data || {};
   const t = { ...template, pages: template.pages.map((p, i) => (i === pageIndex ? p : { ...p, elements: [] })) };
   const { html, width, height } = buildDocumentHtml(t, obj);
-  await acquire();
-  let page;
-  try {
-    const browser = await getBrowser();
-    page = await browser.newPage();
-    await page.setRequestInterception(true);
-    page.on('request', (req) => (req.url().startsWith('data:') || req.url() === 'about:blank' ? req.continue() : req.abort()));
-    await page.setViewport({ width: Math.ceil(width * 3.78), height: Math.ceil(height * 3.78), deviceScaleFactor: 1.5 });
-    await page.setContent(html, { waitUntil: 'load' });
+  return withPage(width, height, async (page) => {
+    await page.setContent(html, { waitUntil: 'load', timeout: config.renderTimeoutMs });
     await page.evaluate(() => document.fonts.ready.then(() => true));
     const el = (await page.$$('.fd-page'))[pageIndex];
     if (!el) return null;
     await el.evaluate((n) => { n.style.background = '#fff'; });
     const buf = await el.screenshot({ type: 'jpeg', quality: 80 });
     return 'data:image/jpeg;base64,' + Buffer.from(buf).toString('base64');
-  } finally {
-    if (page) await page.close().catch(() => {});
-    release();
-  }
+  });
 }

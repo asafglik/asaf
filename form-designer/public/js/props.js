@@ -2,7 +2,7 @@
 import { state, on, change, selectedElements, currentPage, uid, emit, pageSizeMm, allContainers } from './state.js';
 import { escapeHtml, PAGE_SIZES } from '/shared/elements.js';
 import { FORMAT_PRESETS } from '/shared/format.js';
-import { validateExpr, tryEval, FUNCTION_HELP } from '/shared/expr.js';
+import { validateExpr, tryEval, FUNCTION_HELP, exprPath } from '/shared/expr.js';
 import { TYPE_LABELS } from './factory.js';
 import { allValuePaths, arrayPaths, itemPaths } from './datatree.js';
 import { designScope } from './canvas.js';
@@ -111,7 +111,7 @@ const fontGroup = (withValign = true) => group('גופן ויישור', [
   fields.color('צבע', 'style.color', { allowEmpty: false }),
   fields.segmented('יישור', 'style.align', [['right', '⇥', 'ימין'], ['center', '≡', 'מרכז'], ['left', '⇤', 'שמאל'], ['justify', '☰', 'מיושר']], 'right'),
   ...(withValign ? [fields.segmented('אנכי', 'style.valign', [['top', '⤒', 'למעלה'], ['middle', '↕', 'מרכז'], ['bottom', '⤓', 'למטה']], 'top')] : []),
-  fields.segmented('כיוון', 'style.direction', [['rtl', 'ימין←', 'מימין לשמאל'], ['ltr', '→שמאל', 'משמאל לימין']], 'rtl'),
+  fields.segmented('כיוון כתיבה', 'style.direction', [['rtl', 'מימין לשמאל', 'עברית'], ['ltr', 'משמאל לימין', 'אנגלית / מספרים']], 'rtl'),
   fields.num('ריווח אותיות', 'style.letterSpacing', { step: 0.1, suffix: 'pt' }),
 ]);
 
@@ -137,7 +137,8 @@ const NO_VALUE = new Set(['empty', 'notEmpty', 'true', 'false']);
 export function conditionToExpr(cond) {
   const rules = (cond?.rules || []).filter((r) => r.path);
   const q = (v) => (/^-?\d+(\.\d+)?$/.test(String(v ?? '').trim()) ? String(v).trim() : `"${String(v ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
-  const parts = rules.map((r) => {
+  const parts = rules.map((rule) => {
+    const r = { ...rule, path: /[()"'\[]/.test(rule.path) ? rule.path : exprPath(rule.path.trim()) };
     switch (r.op) {
       case 'empty': return `isEmpty(${r.path})`;
       case 'notEmpty': return `!isEmpty(${r.path})`;
@@ -278,7 +279,7 @@ const placeholderGroup = (kind) => group(kind === 'signature' ? 'אזור חתי
   (els) => {
     const v = val(els, 'placeholder');
     const dup = v && allContainers().some((c) => (c.elements || []).some((e) => e.placeholder === v && !els.includes(e)));
-    return `<label class="f"><span>שם (placeholder)</span><input type="text" data-key="placeholder" value="${escapeHtml(v)}" dir="ltr" placeholder="${kind}_1"></label>${dup ? '<div class="expr-err">השם כבר בשימוש ברכיב אחר</div>' : ''}`;
+    return `<label class="f"><span>שם האזור (מזהה ב-API)</span><input type="text" data-key="placeholder" value="${escapeHtml(v)}" dir="ltr" placeholder="${kind}_1"></label>${dup ? '<div class="expr-err">השם כבר בשימוש ברכיב אחר</div>' : ''}`;
   },
   fields.text('תווית', 'label', { placeholder: kind === 'signature' ? 'חתימת הלקוח' : 'צילום תעודת זהות' }),
   ...(kind === 'signature' ? [fields.text('חותם', 'signer', { placeholder: 'לקוח / נציג / ערב' })] : []),
@@ -502,7 +503,7 @@ panel.addEventListener('change', (ev) => {
     if (!p) return;
     const el = selectedElements()[0];
     const ta = panel.querySelector(`[data-key="${t.dataset.insert}"]`);
-    const ins = `{{${p}}}`;
+    const ins = p === 'page' || p === 'pages' ? `{{${p}}}` : `{{${exprPath(p)}}}`;
     const cur = el[t.dataset.insert] || '';
     const pos = ta && document.activeElement !== ta && ta.selectionStart !== undefined ? ta.selectionStart : cur.length;
     change(() => { el[t.dataset.insert] = cur.slice(0, pos) + ins + cur.slice(pos); }, 'props-edit');

@@ -6,8 +6,9 @@ export function setApiKey(k) {
   apiKey = k;
   try { localStorage.setItem('fd-api-key', k); } catch { /* ignore */ }
 }
+// the key is sent only in the x-api-key header (never in URLs)
 export function keyQuery() {
-  return apiKey ? `apiKey=${encodeURIComponent(apiKey)}` : '';
+  return '';
 }
 
 async function request(method, url, body, { raw = false } = {}) {

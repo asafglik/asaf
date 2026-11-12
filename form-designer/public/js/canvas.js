@@ -2,10 +2,11 @@
 // the server prints, and handles selection, moving, resizing and dropping.
 import { state, on, change, select, currentPage, selectedElements, pageSizeMm, canvasSizeMm, findElement, emit, uid } from './state.js';
 import { elementInnerHtml, elementOuterCss, BASE_CSS, MM, escapeHtml, bandElements, isVisible } from '/shared/elements.js';
-import { scopeFor } from '/shared/expr.js';
+import { scopeFor, exprPath } from '/shared/expr.js';
 import { createElement, elementFromNode } from './factory.js';
 import { keyQuery } from './api.js';
 import { startRichEdit, isRichEditing } from './richtext.js';
+import { sanitizeRichHtml } from './sanitize.js';
 
 const scroll = document.getElementById('canvas-scroll');
 let pageEl = null;
@@ -43,7 +44,7 @@ function elementNode(el, scope, ctx) {
   }
   let inner;
   try {
-    inner = elementInnerHtml(el, scope, ctx);
+    inner = elementInnerHtml(el.type === 'richtext' ? { ...el, html: sanitizeRichHtml(el.html) } : el, scope, ctx);
   } catch (e) {
     inner = `<span class="fd-ph">${escapeHtml(e.message)}</span>`;
   }
@@ -108,8 +109,21 @@ export function render() {
     lab.className = 'band-label';
     lab.textContent = state.band === 'header' ? 'עריכת כותרת עליונה – מופיעה בכל עמוד' : 'עריכת כותרת תחתונה – מופיעה בכל עמוד';
     wrap.appendChild(lab);
+    const back = document.createElement('button');
+    back.className = 'band-back';
+    back.type = 'button';
+    back.textContent = '← חזרה לעמוד';
+    back.addEventListener('click', () => emit('action:band-exit'));
+    wrap.appendChild(back);
+    if (!page.elements.length) {
+      const e = document.createElement('div');
+      e.className = 'band-empty';
+      e.textContent = 'הוסיפו לכאן לוגו, טקסט או {{page}} מסרגל הרכיבים';
+      pageEl.appendChild(e);
+    }
   }
   for (const el of page.elements) pageEl.appendChild(elementNode(el, scope, ctx));
+  if (isBlankTemplate()) pageEl.appendChild(emptyState());
   selLayer = document.createElement('div');
   selLayer.className = 'sel-layer';
   pageEl.appendChild(selLayer);
@@ -118,6 +132,31 @@ export function render() {
   renderSelection();
   document.getElementById('status-errors').textContent = renderErrors.length ? `⚠ ${renderErrors.length} שגיאות בביטויים` : '';
   document.getElementById('status-errors').title = renderErrors.join('\n');
+}
+
+function isBlankTemplate() {
+  const t = state.template;
+  return !state.band && t.pages.length === 1 && !t.pages[0].elements.length && !t.pages[0].background && !(t.header?.elements?.length) && !(t.footer?.elements?.length);
+}
+
+function emptyState() {
+  const d = document.createElement('div');
+  d.className = 'canvas-empty';
+  const hasData = !!state.tree;
+  d.innerHTML = `<div class="ce-box"><h3>מתחילים תבנית חדשה</h3><p>בחרו איך להתחיל. אפשר גם פשוט לגרור רכיבים מהסרגל.</p>
+    <div class="ce-cards">
+      <button class="ce-card" data-action="data" type="button"><span class="ce-step">1</span><b>עולם נתונים</b><span>${hasData ? 'מוגדר ✓ – גררו שדות מלשונית "נתונים"' : 'הדביקו דוגמת XML או JSON'}</span></button>
+      <button class="ce-card" data-action="import" type="button"><span class="ce-step">2</span><b>ייבוא PDF או Word</b><span>טופס קיים כרקע או כטקסט לעריכה</span></button>
+      <button class="ce-card" data-action="agent-tab" type="button"><span class="ce-step">✨</span><b>סוכן חכם</b><span>מיקום שדות אוטומטי מקובץ דוגמה</span></button>
+    </div></div>`;
+  return d;
+}
+
+function guessFormat(sample) {
+  const s = String(sample ?? '').trim();
+  if (/^-?\d+\.\d+$/.test(s)) return 'number:2';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return 'date:dd/MM/yyyy';
+  return '';
 }
 
 export function renderSelection() {
@@ -165,9 +204,15 @@ function snap(v) {
 // ---------------------------------------------------------------- pointer
 let drag = null;
 
+export function commitPropsEdit() {
+  const ae = document.activeElement;
+  if (ae && document.getElementById('props').contains(ae)) ae.blur();
+}
+
 scroll.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0 || !pageEl || isRichEditing()) return;
-  if (ev.target.closest('.inline-editor')) return;
+  commitPropsEdit();
+  if (ev.target.closest('.inline-editor') || ev.target.closest('.canvas-empty .ce-box') || ev.target.closest('.band-back')) return;
   const handle = ev.target.closest('.handle');
   const elNode = ev.target.closest('.fd-el[data-id]');
   const start = toMm(ev.clientX, ev.clientY);
@@ -327,7 +372,8 @@ scroll.addEventListener('drop', (ev) => {
     const n = JSON.parse(node);
     const target = dropTargetAt(ev.clientX, ev.clientY);
     if (target && dropOnElement(target, n)) return;
-    el = elementFromNode(n);
+    const lastTable = [...state.template.pages, state.template.header, state.template.footer].filter(Boolean).flatMap((c) => c.elements || []).filter((e) => e.type === 'table').pop();
+    el = elementFromNode(n, lastTable);
   }
   if (!el) return;
   addElement(el, p);
@@ -337,7 +383,15 @@ scroll.addEventListener('drop', (ev) => {
 function dropTargetAt(x, y) {
   const hit = document.elementFromPoint(x, y);
   const node = hit && hit.closest('.design-page .fd-el[data-id]');
-  return node ? findElement(node.dataset.id) : null;
+  if (!node) return null;
+  const el = findElement(node.dataset.id);
+  // a table only takes the drop over its rows, not over the empty part of its box
+  if (el?.type === 'table') {
+    const tb = node.querySelector('table');
+    const r = tb && tb.getBoundingClientRect();
+    if (!r || y > r.bottom || y < r.top) return null;
+  }
+  return el;
 }
 
 function dropOnElement(el, n) {
@@ -346,21 +400,24 @@ function dropOnElement(el, n) {
   if (el.type === 'table') {
     if (n.kind === 'array') { change(() => { el.binding = path; }); return true; }
     // row fields are relative to the row; root fields still resolve inside a row
-    change(() => el.columns.push({ id: uid('c'), header: n.name.replace(/^@/, ''), binding: path, width: 1 }));
+    change(() => el.columns.push({ id: uid('c'), header: n.name.replace(/^@/, ''), binding: path, width: 1, format: guessFormat(n.sample) }));
     select(el.id);
+    emit('toast:' + JSON.stringify({ msg: `נוספה עמודה "${n.name.replace(/^@/, '')}" לטבלה`, undo: true }));
     return true;
   }
   if (n.kind === 'array') return false;
   const full = n.rel && n.arrayPath ? `${n.arrayPath}[0].${path}` : path;
+  if (['line', 'rect', 'ellipse'].includes(el.type)) return false;
   change(() => {
-    if (el.type === 'text') el.text = (el.text || '') + `{{${full}}}`;
-    else if (el.type === 'richtext') el.html = (el.html || '').replace(/(<\/p>)?\s*$/, ` {{${full}}}$1`);
-    else if (el.type === 'computed') el.expression = (el.expression || '') + full;
+    if (el.type === 'text') el.text = (el.text || '') + `{{${exprPath(full)}}}`;
+    else if (el.type === 'richtext') el.html = (el.html || '').replace(/(<\/p>)?\s*$/, ` {{${exprPath(full)}}}$1`);
+    else if (el.type === 'computed') el.expression = (el.expression || '') + exprPath(full);
     else if (el.type === 'image' || el.type === 'signature' || el.type === 'upload') { el.binding = full; if (el.type === 'image') el.source = 'field'; }
     else if (el.type === 'barcode') { el.valueMode = 'field'; el.binding = full; }
     else el.binding = full;
   });
   select(el.id);
+  emit('toast:' + JSON.stringify({ msg: `השדה ${full} קושר לרכיב`, undo: true }));
   return true;
 }
 
@@ -375,7 +432,7 @@ scroll.addEventListener('dragover', (ev) => {
   const node = hit && hit.closest('.design-page .fd-el[data-id]');
   if (node !== dropHi) {
     clearDropTarget();
-    if (node && !['line', 'rect', 'ellipse'].includes(findElement(node.dataset.id)?.type)) {
+    if (node && !['line', 'rect', 'ellipse'].includes(findElement(node.dataset.id)?.type) && dropTargetAt(ev.clientX, ev.clientY)) {
       node.classList.add('drop-target');
       dropHi = node;
     }
@@ -383,16 +440,40 @@ scroll.addEventListener('dragover', (ev) => {
 });
 scroll.addEventListener('dragleave', (ev) => { if (!scroll.contains(ev.relatedTarget)) clearDropTarget(); });
 
+/** Usable vertical range on a page: below the header band, above the footer band. */
+function freeRange() {
+  const { h } = canvasSizeMm();
+  if (state.band) return { top: 0, bottom: h };
+  const t = state.template;
+  const top = t.header && t.header.enabled !== false ? Number(t.header.height) || 0 : 0;
+  const bottom = h - (t.footer && t.footer.enabled !== false ? Number(t.footer.height) || 0 : 0);
+  return { top, bottom: Math.max(top + 5, bottom) };
+}
+
+/** First spot at or below `y` where the element does not overlap others. */
+function freeSpot(el, x, y) {
+  const { top, bottom } = freeRange();
+  const others = currentPage().elements;
+  const hits = (yy) => others.some((o) => x < o.x + o.w && x + el.w > o.x && yy < o.y + Math.max(o.h, 1) && yy + el.h > o.y);
+  for (let yy = Math.max(top, y); yy + el.h <= bottom; yy += 2) if (!hits(yy)) return yy;
+  for (let yy = top; yy + el.h <= bottom; yy += 2) if (!hits(yy)) return yy;
+  return Math.max(top, Math.min(y, bottom - el.h));
+}
+
 export function addElement(el, at) {
-  const { w, h } = canvasSizeMm();
+  const { w } = canvasSizeMm();
+  const { top, bottom } = freeRange();
   if (!at) {
-    // centre of the visible area
+    // centre of the visible area, moved down to the first free place
     const r = scroll.getBoundingClientRect();
-    at = pageEl ? toMm(r.left + r.width / 2, r.top + Math.min(r.height / 2, 300)) : { x: 20, y: 20 };
-    at.x -= el.w / 2;
+    const c = pageEl ? toMm(r.left + r.width / 2, r.top + Math.min(r.height / 3, 220)) : { x: 20, y: 20 };
+    const x = Math.max(0, Math.min(c.x - el.w / 2, w - el.w));
+    at = { x, y: freeSpot(el, x, c.y) };
   }
+  // keep it on the page and out of the header / footer bands
+  if (el.h > bottom - top) el.h = Math.max(5, bottom - top - 2);
   el.x = snap(Math.max(0, Math.min(at.x, w - el.w)));
-  el.y = snap(Math.max(0, Math.min(at.y, h - Math.max(el.h, 1))));
+  el.y = snap(Math.max(top, Math.min(at.y, bottom - Math.max(el.h, 1))));
   change((t) => currentPage().elements.push(el));
   select(el.id);
 }

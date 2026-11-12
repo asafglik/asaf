@@ -34,6 +34,7 @@ export function parseData(content, { format, arrays = [] } = {}) {
     parseAttributeValue: false,
     trimValues: true,
     ignoreDeclaration: true,
+    htmlEntities: true,
     ignorePiTags: true,
     removeNSPrefix: true,
     isArray: (name, jpath, isLeaf, isAttr) => {

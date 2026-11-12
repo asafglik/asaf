@@ -82,7 +82,7 @@ function readUploaded() {
 }
 
 function uploadedFaces() {
-  return readUploaded().map((f) => ({
+  return readUploaded().filter((f) => FAMILY_RE.test(f.family || '') && f.file && path.basename(f.file) === f.file).map((f) => ({
     family: f.family,
     weight: f.weight || 400,
     style: f.style || 'normal',
@@ -108,15 +108,20 @@ export function listFonts() {
   const fams = new Map();
   for (const f of BUNDLED) fams.set(f.family, { family: f.family, source: 'bundled', category: f.category });
   for (const a of ALIASES) fams.set(a.family, { family: a.family, source: 'system', category: 'office' });
-  for (const u of readUploaded()) fams.set(u.family, { family: u.family, source: 'uploaded', category: 'custom' });
+  for (const u of readUploaded()) if (FAMILY_RE.test(u.family || '')) fams.set(u.family, { family: u.family, source: 'uploaded', category: 'custom' });
   return [...fams.values()];
 }
+
+const FAMILY_RE = /^[\p{L}\p{N} _-]{1,60}$/u;
+const safeFamily = (f) => String(f || '').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 60);
 
 function faceCss(face, url) {
   const src = [];
   for (const l of face.locals || []) src.push(`local('${l}')`);
   src.push(`url(${url}) format('${face.format}')`);
-  return `@font-face{font-family:'${face.family}';font-style:${face.style};font-weight:${face.weight};font-display:block;src:${src.join(',')};${face.range ? `unicode-range:${face.range};` : ''}}`;
+  const style = face.style === 'italic' ? 'italic' : 'normal';
+  const weight = Number(face.weight) || 400;
+  return `@font-face{font-family:'${safeFamily(face.family)}';font-style:${style};font-weight:${weight};font-display:block;src:${src.join(',')};${face.range ? `unicode-range:${face.range};` : ''}}`;
 }
 
 /** CSS for the designer: fonts served over HTTP. */
@@ -149,12 +154,22 @@ export function fontsCssForTemplate(template) {
 }
 
 export function saveUploadedFont({ family, weight = 400, style = 'normal', fileName, dataBase64 }) {
-  if (!family || !dataBase64) throw new Error('חסר שם גופן או קובץ');
-  const ext = path.extname(fileName || '').toLowerCase().replace('.', '') || 'ttf';
-  if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) throw new Error('סוג קובץ גופן לא נתמך (ttf/otf/woff/woff2)');
+  const bad = (m) => Object.assign(new Error(m), { status: 400 });
+  family = String(family || '').trim();
+  if (!FAMILY_RE.test(family)) throw bad('שם גופן יכול להכיל אותיות, ספרות, רווח, - ו-_ בלבד');
+  if (!dataBase64) throw bad('חסר קובץ גופן');
+  weight = Number(weight);
+  if (![100, 200, 300, 400, 500, 600, 700, 800, 900].includes(weight)) throw bad('משקל גופן לא תקין');
+  style = style === 'italic' ? 'italic' : 'normal';
+  const ext = path.extname(String(fileName || '')).toLowerCase().replace('.', '') || 'ttf';
+  if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) throw bad('סוג קובץ גופן לא נתמך (ttf/otf/woff/woff2)');
+  const buf = Buffer.from(String(dataBase64), 'base64');
+  if (buf.length > 15 * 1024 * 1024) throw bad('קובץ הגופן גדול מדי');
   fs.mkdirSync(uploadedDir(), { recursive: true });
   const safe = `${family.replace(/[^\p{L}\p{N}_-]+/gu, '_')}-${weight}-${style}.${ext}`;
-  fs.writeFileSync(path.join(uploadedDir(), safe), Buffer.from(dataBase64, 'base64'));
+  const target = path.resolve(uploadedDir(), safe);
+  if (path.dirname(target) !== path.resolve(uploadedDir())) throw bad('שם קובץ לא תקין');
+  fs.writeFileSync(target, buf);
   const list = readUploaded().filter((f) => !(f.family === family && (f.weight || 400) === +weight && (f.style || 'normal') === style));
   list.push({ family, weight: +weight, style, file: safe });
   fs.writeFileSync(path.join(uploadedDir(), 'fonts.json'), JSON.stringify(list, null, 2));
@@ -164,7 +179,8 @@ export function saveUploadedFont({ family, weight = 400, style = 'normal', fileN
 export function deleteUploadedFont(family) {
   const list = readUploaded();
   for (const f of list.filter((x) => x.family === family)) {
-    fs.rmSync(path.join(uploadedDir(), f.file), { force: true });
+    const target = path.resolve(uploadedDir(), path.basename(f.file));
+    if (path.dirname(target) === path.resolve(uploadedDir())) fs.rmSync(target, { force: true });
   }
   fs.writeFileSync(path.join(uploadedDir(), 'fonts.json'), JSON.stringify(list.filter((x) => x.family !== family), null, 2));
   return listFonts();

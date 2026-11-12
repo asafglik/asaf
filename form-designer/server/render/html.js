@@ -2,6 +2,7 @@
 // the paginator adds continuation pages for long tables / rich text).
 import { elementHtml, BASE_CSS, PAGE_SIZES, escapeHtml, bandElements } from '../../shared/elements.js';
 import { scopeFor } from '../../shared/expr.js';
+import { sanitizeTemplate } from '../sanitize.js';
 import { barcodeSvg } from '../barcode.js';
 import { fontsCssForTemplate } from '../fonts.js';
 
@@ -17,6 +18,7 @@ export function pageSize(template) {
 }
 
 export function buildDocumentHtml(template, data, { fontsCss } = {}) {
+  template = sanitizeTemplate(template);
   const { width, height } = pageSize(template);
   const errors = [];
   const ctx = { design: false, errors, barcode: barcodeSvg };
