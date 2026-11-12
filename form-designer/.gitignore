@@ -1,0 +1,5 @@
+node_modules/
+storage/templates/.history/
+storage/fonts/
+config.json
+*.tmp

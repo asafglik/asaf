@@ -1,0 +1,12 @@
+{
+  "port": 3700,
+  "host": "0.0.0.0",
+  "mode": "full",
+  "storageDir": "storage",
+  "chromePath": "",
+  "apiKey": "",
+  "maxConcurrent": 4,
+  "bodyLimit": "60mb",
+  "allowRemoteImages": false,
+  "sofficePath": ""
+}

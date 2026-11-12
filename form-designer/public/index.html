@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>מעצב טפסים</title>
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/css/designer.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">▤</span><span>מעצב טפסים</span></div>
+
+    <div class="tpl-id">
+      <button class="tpl-switch" data-action="open" title="פתיחת תבנית">
+        <span class="tpl-num" id="tpl-num">—</span>
+        <span class="tpl-name" id="tpl-name">טוען...</span>
+        <span class="dirty-dot" id="dirty-dot" title="יש שינויים שלא נשמרו"></span>
+      </button>
+    </div>
+
+    <div class="tb-group">
+      <button class="tb" data-action="new" title="תבנית חדשה">חדש</button>
+      <button class="tb" data-action="open" title="פתיחת תבנית (Ctrl+O)">פתיחה</button>
+      <button class="tb" data-action="save" title="שמירה (Ctrl+S)">שמירה</button>
+      <button class="tb" data-action="save-as" title="שמירה בשם / במספר אחר">שמירה בשם</button>
+    </div>
+
+    <div class="tb-group">
+      <button class="tb" data-action="import" title="יצירת תבנית מקובץ PDF או Word">ייבוא PDF / Word</button>
+      <button class="tb" data-action="data" title="הגדרת עולם הנתונים (XML / JSON)">עולם נתונים</button>
+    </div>
+
+    <div class="tb-group">
+      <button class="tb icon" data-action="undo" title="ביטול (Ctrl+Z)">↶</button>
+      <button class="tb icon" data-action="redo" title="חזרה (Ctrl+Y)">↷</button>
+    </div>
+
+    <div class="tb-group zoom">
+      <button class="tb icon" data-action="zoom-out" title="הקטנה">−</button>
+      <button class="tb zoom-val" data-action="zoom-fit" id="zoom-val" title="התאמה לרוחב">100%</button>
+      <button class="tb icon" data-action="zoom-in" title="הגדלה">+</button>
+    </div>
+
+    <label class="tb-toggle" title="הצגת ערכים מנתוני הדוגמה על גבי התבנית">
+      <input type="checkbox" id="show-data" checked> נתוני דוגמה
+    </label>
+
+    <div class="spacer"></div>
+
+    <button class="tb primary" data-action="preview" title="הפקת PDF עם נתוני הדוגמה">תצוגה מקדימה PDF</button>
+    <div class="menu">
+      <button class="tb icon" data-action="menu" aria-haspopup="true" title="עוד">⋯</button>
+      <div class="menu-pop" id="menu-pop" hidden>
+        <button data-action="api-help">שימוש מהשרת (API)</button>
+        <button data-action="fonts">ניהול גופנים</button>
+        <button data-action="history">היסטוריית גרסאות</button>
+        <hr>
+        <button data-action="export">ייצוא תבנית (JSON)</button>
+        <button data-action="import-json">ייבוא תבנית (JSON)</button>
+        <hr>
+        <button data-action="delete-template" class="danger">מחיקת התבנית</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="side side-start">
+      <nav class="tabs" role="tablist">
+        <button class="tab on" data-tab="tools" role="tab">רכיבים</button>
+        <button class="tab" data-tab="data" role="tab">נתונים</button>
+        <button class="tab" data-tab="pages" role="tab">עמודים</button>
+      </nav>
+      <section class="tab-pane on" data-pane="tools">
+        <div class="tools" id="tools"></div>
+        <p class="hint pad">גררו רכיב לדף או לחצו עליו להוספה. לחיצה כפולה על טקסט בדף עורכת אותו.</p>
+      </section>
+      <section class="tab-pane" data-pane="data">
+        <div class="search"><input type="search" id="data-filter" placeholder="חיפוש שדה..."></div>
+        <div id="data-tree" class="data-tree"></div>
+        <p class="hint pad">גררו שדה לדף ליצירת שדה נתונים, או רשימה (☰) ליצירת טבלה. לחיצה על שדה מקשרת אותו לרכיב הנבחר.</p>
+      </section>
+      <section class="tab-pane" data-pane="pages">
+        <div id="pages-list" class="pages-list"></div>
+        <div class="btn-row pad">
+          <button class="btn" data-action="page-add">+ עמוד</button>
+          <button class="btn" data-action="page-dup">שכפול</button>
+          <button class="btn danger-text" data-action="page-del">מחיקה</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="center">
+      <div id="canvas-scroll" class="canvas-scroll" tabindex="-1"></div>
+      <footer class="statusbar">
+        <span id="status-page"></span>
+        <span id="status-sel"></span>
+        <span id="status-errors" class="warn"></span>
+        <span class="spacer"></span>
+        <span id="status-msg"></span>
+      </footer>
+    </section>
+
+    <aside class="side side-end" id="props" aria-label="מאפיינים"></aside>
+  </main>
+
+  <dialog id="dlg" class="dlg">
+    <form method="dialog" class="dlg-inner">
+      <header class="dlg-head"><h2 id="dlg-title"></h2><button class="mini" value="cancel" aria-label="סגירה">✕</button></header>
+      <div class="dlg-body" id="dlg-body"></div>
+      <footer class="dlg-foot" id="dlg-foot"></footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <datalist id="dl-paths"></datalist>
+  <datalist id="dl-arrays"></datalist>
+  <datalist id="dl-formats"></datalist>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
