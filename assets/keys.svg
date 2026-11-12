@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" role="img" aria-label="מפתח ובית">
+  <defs>
+    <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7A5C"/><stop offset=".55" stop-color="#FF4E31"/><stop offset="1" stop-color="#D93A20"/>
+    </linearGradient>
+    <linearGradient id="white" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#DCDDE3"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset=".6" stop-color="#C9CBD3"/><stop offset="1" stop-color="#F2F3F6"/>
+    </linearGradient>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="5" stdDeviation="4" flood-color="#5A2A20" flood-opacity=".18"/>
+    </filter>
+  </defs>
+  <!-- key -->
+  <g filter="url(#sh)" transform="rotate(38 92 70)">
+    <rect x="79" y="80" width="23" height="118" rx="9" fill="url(#red)"/>
+    <path d="M101 148h16v10h-8v9h11v11h-19z" fill="url(#red)"/>
+    <path d="M101 183h9v10h-9z" fill="#E8452A"/>
+    <circle cx="90.5" cy="70" r="31" fill="url(#red)"/>
+    <circle cx="90.5" cy="62" r="9" fill="#F4F4F8"/>
+    <rect x="84" y="92" width="10" height="104" rx="4" fill="#FF8B70" opacity=".35"/>
+  </g>
+  <!-- ring -->
+  <circle cx="118" cy="38" r="22" fill="none" stroke="url(#ring)" stroke-width="7" filter="url(#sh)"/>
+  <!-- house tag -->
+  <g filter="url(#sh)">
+    <path d="M128 102l-5 6h0l-11 13a6 6 0 0 0 9 8l3-3v58a6 6 0 0 0 6 6h58a6 6 0 0 0 6-6v-58l3 3a6 6 0 0 0 9-8l-40-46a10 10 0 0 0-15 0z" fill="url(#red)"/>
+    <path d="M131 128l27-31 31 34v52a3 3 0 0 1-3 3h-52a3 3 0 0 1-3-3z" fill="url(#white)"/>
+    <circle cx="157" cy="104" r="5" fill="#C4C6CE"/>
+    <path d="M143 182v-30a15 15 0 0 1 30 0v30z" fill="url(#red)"/>
+    <rect x="148" y="160" width="7" height="22" rx="1.5" fill="#FFFFFF"/>
+    <rect x="161" y="160" width="7" height="22" rx="1.5" fill="#FFFFFF"/>
+    <path d="M147 152h22" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

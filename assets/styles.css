@@ -1,0 +1,12 @@
+:root{
+  --accent:#FF4E31;--accent-hover:#E8401F;--ink:#1B2140;--text:#2B3150;--muted:#5B6078;
+  --surface:#F5F6FA;--page:#F4F4F8;--overlay:rgba(30,30,32,.9);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:"Heebo",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:var(--text);direction:rtl;-webkit-font-smoothing:antialiased}
+h1{color:var(--ink);font-weight:800;letter-spacing:-.01em;line-height:1.2}
+.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:background .15s,transform .15s,box-shadow .15s;box-shadow:0 6px 16px -6px rgba(255,78,49,.6)}
+.btn:hover{background:var(--accent-hover);transform:translateY(-1px)}
+.btn:focus-visible{outline:3px solid rgba(255,78,49,.35);outline-offset:3px}
+.illus{display:block;user-select:none}

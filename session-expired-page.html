@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>יש להתחבר מחדש</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css">
+<style>
+  body{background:var(--page);display:grid;place-items:center;padding:16px;min-height:100vh}
+  main{text-align:center;display:flex;flex-direction:column;align-items:center;animation:rise .4s ease-out}
+  .illus{width:160px;height:160px;margin-bottom:20px}
+  h1{font-size:28px;margin-bottom:10px}
+  p{font-size:14px;line-height:1.55;color:var(--muted);margin-bottom:22px;max-width:72ch}
+  .btn{height:46px;min-width:180px;padding:0 32px;font-size:16px}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @media (max-width:520px){h1{font-size:24px}.illus{width:130px;height:130px}}
+</style>
+</head>
+<body>
+  <main>
+    <img class="illus" src="assets/keys.svg" alt="" width="150" height="150">
+    <h1>יש להתחבר מחדש למערכת</h1>
+    <p>כדי לשמור על אבטחת החשבון שלך, ניתקנו אותך מהמערכת לאחר חוסר פעילות ממושך</p>
+    <a class="btn" href="#">התחבר מחדש</a>
+  </main>
+</body>
+</html>
