@@ -1,0 +1,8 @@
+node_modules
+.git
+config.json
+storage/customers.json
+storage/templates/.history
+storage/fonts
+test
+*.tmp

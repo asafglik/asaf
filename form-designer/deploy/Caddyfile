@@ -1,0 +1,12 @@
+# HTTPS certificate from Let's Encrypt for $DOMAIN (DNS must point to this server).
+{$DOMAIN} {
+	request_body {
+		max_size 300MB
+	}
+	reverse_proxy form-designer:3700 {
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+}

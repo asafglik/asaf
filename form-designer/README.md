@@ -17,6 +17,8 @@
 
 ## התקנה והרצה
 
+> **התקנה בשרת ענן** (מעצב מרכזי, API הפקה לכל לקוח, Docker ו-HTTPS): ראו [docs/INSTALL.md](docs/INSTALL.md).
+
 דרישות:
 
 * Node.js בגרסה 18 ומעלה.
@@ -484,6 +486,8 @@ form-designer/
 │   └── render/        בניית HTML, חלוקה לעמודים בדפדפן, Chrome → PDF, מיזוג רקע PDF (pdf-lib)
 ├── shared/            קוד משותף לשרת ולמעצב: שפת הביטויים, עיצוב ערכים, בניית HTML של הרכיבים
 ├── public/            מסך הניהול (index.html) והמעצב (designer.html), HTML/CSS/JS ללא שלב בנייה
+├── docs/              INSTALL.md – מדריך התקנה בשרת ענן ובשרתי לקוחות
+├── deploy/            docker-compose לשרת המרכזי (עם HTTPS) ולשרת הפקה אצל לקוח
 ├── cli/               render.js – הפקה משורת הפקודה; import-bundle.js – התקנת חבילת לקוח
 ├── clients/           דוגמאות קריאה: ObjectScript, C#, PowerShell
 ├── examples/          נתוני דוגמה ותבנית 1001

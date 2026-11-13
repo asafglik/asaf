@@ -4,3 +4,4 @@ storage/fonts/
 config.json
 *.tmp
 storage/customers.json
+deploy/.env
