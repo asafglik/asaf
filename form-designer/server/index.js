@@ -16,6 +16,7 @@ import { templatePlaceholders } from '../shared/elements.js';
 import { pageSize } from './render/html.js';
 import { autoDesign, designRequest, aiAvailable, translateTexts, aiReview } from './ai.js';
 import { reviewPdf } from './review.js';
+import { renderBatch, mergePdfs, manifestOf, ZipWriter } from './batch.js';
 import { parseData } from './data.js';
 import { sanitizeTemplate } from './sanitize.js';
 import { decodeBytes, charsetOf } from '../shared/encoding.js';
@@ -117,6 +118,76 @@ app.post('/api/render', apiKey, jsonBody, asyncH(async (req, res) => {
   if (b.dataBase64) data = Buffer.from(b.dataBase64, 'base64').toString('utf8');
   if (typeof data === 'string' && !format) format = detectFormat(data);
   await sendRender(req, res, templateId, data, format);
+}));
+
+// POST /api/render-batch/:templateId   bulk rendering (thousands of records)
+// { records: [ <object | XML/JSON string>, ... ] }  or  { data: <one XML/JSON with a list>, split: "invoice" (path after the XML root), wrap?: "name" }
+// output: zip (default, PDFs + manifest.json, streamed) | merged (one PDF) | json (base64 per record)
+// fileName: name pattern per record, e.g. "invoice-{{invoice.number}}.pdf"
+const batchBody = express.json({ limit: config.batchBodyLimit });
+app.post('/api/render-batch/:templateId', apiKey, batchBody, asyncH(async (req, res) => {
+  const template = store.getTemplate(String(req.params.templateId));
+  checkCustomerAccess(req, template);
+  const b = req.body || {};
+  const q = (k) => b[k] ?? req.query[k];
+  let records = b.records;
+  if (!Array.isArray(records) && b.data !== undefined && q('split')) {
+    const root = typeof b.data === 'string' ? parseData(b.data, { format: q('format'), arrays: [...(template.schema?.arrays || []), String(q('split'))] }) : b.data;
+    let list = String(q('split')).split('.').filter(Boolean).reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), root);
+    if (list && !Array.isArray(list)) list = [list];
+    const wrap = q('wrap');
+    records = (list || []).map((item) => (wrap ? { [wrap]: item } : item));
+  }
+  if (!Array.isArray(records) || !records.length) return res.status(400).json({ error: 'חסרות רשומות: records (מערך) או data + split' });
+  if (records.length > config.maxBatch) return res.status(413).json({ error: `עד ${config.maxBatch} רשומות בקריאה אחת` });
+  const output = String(q('output') || 'zip');
+  const opts = { format: q('format'), lang: q('lang'), fileName: q('fileName'), concurrency: q('concurrency') };
+  const started = Date.now();
+  const base = String(q('archiveName') || `batch-${template.id}`).replace(/[^\p{L}\p{N}._ -]+/gu, '_');
+
+  if (output === 'zip') {
+    // streamed: the first PDFs are on the wire while the rest are still rendering
+    res.status(200);
+    res.type('application/zip');
+    res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(base)}.zip"; filename*=UTF-8''${encodeURIComponent(base)}.zip`);
+    res.set('X-Batch-Count', String(records.length));
+    let aborted = false;
+    res.on('close', () => { if (!res.writableFinished) aborted = true; });
+    const write = (buf) => new Promise((resolve) => { if (aborted || res.write(buf)) resolve(); else res.once('drain', resolve); });
+    const zip = new ZipWriter(write);
+    let chain = Promise.resolve();
+    const results = await renderBatch(template, records, {
+      ...opts,
+      onResult: (r) => {
+        const { pdf, fileName } = r;
+        if (r.ok && !aborted) chain = chain.then(() => zip.add(fileName, pdf));
+        delete r.pdf; // keep memory flat: each PDF is released once it is written
+        return chain;
+      },
+    });
+    await chain;
+    if (!aborted) {
+      await zip.add('manifest.json', Buffer.from(JSON.stringify(manifestOf(template, results, Date.now() - started), null, 2), 'utf8'));
+      await zip.finish();
+    }
+    return res.end();
+  }
+  const results = await renderBatch(template, records, opts);
+  const manifest = manifestOf(template, results, Date.now() - started);
+  res.set('X-Batch-Count', String(manifest.count));
+  res.set('X-Batch-Failed', String(manifest.failed));
+  if (output === 'merged') {
+    const pdf = await mergePdfs(results);
+    res.type('application/pdf');
+    res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(base)}.pdf"; filename*=UTF-8''${encodeURIComponent(base)}.pdf`);
+    res.set('X-Batch-Manifest', encodeURIComponent(JSON.stringify({ count: manifest.count, ok: manifest.ok, failed: manifest.failed, ms: manifest.ms })));
+    return res.send(pdf);
+  }
+  if (output === 'json') {
+    manifest.items.forEach((it, i) => { if (results[i].ok) it.pdfBase64 = results[i].pdf.toString('base64'); });
+    return res.json(manifest);
+  }
+  res.status(400).json({ error: 'output: zip | merged | json' });
 }));
 
 app.get('/api/health', (req, res) => {
@@ -333,6 +404,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   if (status >= 500) console.error(err);
   // messages of errors we raise ourselves (with a status) are meant for the user; others may leak internals
   const msg = err.status || status < 500 ? err.message || 'שגיאה' : 'שגיאה פנימית בשרת';
+  if (status === 503) res.set('Retry-After', '2');
   res.status(status).json({ error: msg });
 });
 

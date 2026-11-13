@@ -42,6 +42,9 @@ export const config = {
   renderTimeoutMs: +(env.FD_RENDER_TIMEOUT_MS || fileCfg.renderTimeoutMs || 60000),
   maxImportBytes: +(fileCfg.maxImportBytes || 25 * 1024 * 1024),
   bodyLimit: env.FD_BODY_LIMIT || fileCfg.bodyLimit || '60mb',
+  // bulk rendering: records per call and request size
+  maxBatch: +(env.FD_MAX_BATCH || fileCfg.maxBatch || 10000),
+  batchBodyLimit: env.FD_BATCH_BODY_LIMIT || fileCfg.batchBodyLimit || '300mb',
   allowRemoteImages: bool(env.FD_ALLOW_REMOTE_IMAGES, !!fileCfg.allowRemoteImages),
   sofficePath: env.SOFFICE_PATH || fileCfg.sofficePath || '',
   historyLimit: +(fileCfg.historyLimit || 20),
