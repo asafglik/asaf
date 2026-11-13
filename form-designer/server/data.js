@@ -35,14 +35,17 @@ export function parseData(content, { format, arrays = [] } = {}) {
     parseAttributeValue: false,
     trimValues: true,
     ignoreDeclaration: true,
-    htmlEntities: true,
+    // entity decoding only when the text has entities (saves time on large files)
+    processEntities: text.includes('&'),
+    htmlEntities: text.includes('&'),
     ignorePiTags: true,
     removeNSPrefix: true,
-    isArray: (name, jpath, isLeaf, isAttr) => {
+    isArray: arraySet.size ? (name, jpath, isLeaf, isAttr) => {
       if (isAttr) return false;
-      const p = String(jpath).split('.').slice(1).join('.');
-      return arraySet.has(p);
-    },
+      const j = String(jpath);
+      const i = j.indexOf('.');
+      return i >= 0 && arraySet.has(j.slice(i + 1));
+    } : () => false,
   });
   let obj;
   try {

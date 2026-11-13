@@ -162,6 +162,22 @@ export function paginate() {
     if (count <= 1) { applyShowOn(page, 0, 1); continue; }
 
     flows.forEach((f, i) => f.setAttribute('data-flow-i', String(i)));
+    // take the rows / blocks out before copying the page, so each continuation
+    // page is built from an empty copy and gets only its own rows (linear time
+    // even for tables with tens of thousands of rows)
+    const items = plans.map(({ f, plan }) => {
+      if (!plan) return null;
+      if (plan.kind === 'table') {
+        const t = f.querySelector(':scope > table.fd-tbl');
+        const body = t.tBodies[0];
+        const rows = body ? Array.from(body.rows) : [];
+        rows.forEach((r) => r.remove());
+        return rows;
+      }
+      const kids = Array.from(f.children);
+      kids.forEach((k) => k.remove());
+      return kids;
+    });
     const proto = page.cloneNode(true);
     let prev = page;
     const segPages = [page];
@@ -187,13 +203,14 @@ export function paginate() {
         const seg = plan.segs[s];
         if (!seg) { f.remove(); return; } // this element already ended
         const [from, to, foot] = seg;
+        const mine = items[fi].slice(from, to);
         if (plan.kind === 'table') {
           const t = f.querySelector(':scope > table.fd-tbl');
-          const rows = t.tBodies[0] ? Array.from(t.tBodies[0].rows) : [];
-          rows.forEach((r, i) => { if (i < from || i >= to) r.remove(); });
+          const body = t.tBodies[0];
+          if (body) body.append(...mine);
           if (!foot && t.tFoot) t.tFoot.remove();
         } else {
-          Array.from(f.children).forEach((k, i) => { if (i < from || i >= to) k.remove(); });
+          f.append(...mine);
         }
       });
       applyShowOn(pg, s, segPages.length);

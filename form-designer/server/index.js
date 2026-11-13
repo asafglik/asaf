@@ -74,17 +74,36 @@ const asyncH = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).c
 const rawBody = express.raw({ type: () => true, limit: config.bodyLimit });
 const jsonBody = express.json({ limit: config.bodyLimit });
 
+// admission by size: request bodies being processed together stay under
+// FD_MAX_INFLIGHT_MB, so a burst of large XML files cannot exhaust memory.
+// The rest get 503 + Retry-After before their body is read.
+let inflight = 0;
+function admit(req, res, next) {
+  const len = Number(req.get('content-length')) || 1e6;
+  const max = config.maxInflightMb * 1e6;
+  if (inflight > 0 && inflight + len > max) {
+    res.set('Retry-After', '5');
+    return res.status(503).json({ error: 'השרת עמוס, נסו שוב בעוד רגע' });
+  }
+  inflight += len;
+  let done = false;
+  const free = () => { if (!done) { done = true; inflight -= len; } };
+  res.once('finish', free);
+  res.once('close', free);
+  next();
+}
+
 function pdfFileName(req, template) {
   const n = String(req.query.fileName || req.body?.fileName || `${template.id}.pdf`).replace(/[^\p{L}\p{N}._ -]+/gu, '_');
   return n.toLowerCase().endsWith('.pdf') ? n : n + '.pdf';
 }
 
-async function sendRender(req, res, templateId, data, format) {
+async function sendRender(req, res, templateId, data, format, charset) {
   const template = store.getTemplate(String(templateId));
   checkCustomerAccess(req, template);
   const started = Date.now();
   const lang = req.query.lang || req.body?.lang || undefined;
-  const { pdf, errors, pages, placeholders } = await renderPdf(template, data, { format, lang });
+  const { pdf, errors, pages, placeholders } = await renderPdf(template, data, { format, lang, charset });
   const name = pdfFileName(req, template);
   res.set('X-Render-Pages', String(pages));
   res.set('X-Render-Ms', String(Date.now() - started));
@@ -101,15 +120,18 @@ async function sendRender(req, res, templateId, data, format) {
 }
 
 // POST /api/render/1001   body = XML or JSON data as-is
-app.post('/api/render/:templateId', apiKey, rawBody, asyncH(async (req, res) => {
-  const body = Buffer.isBuffer(req.body) ? decodeBytes(req.body, charsetOf(req.get('content-type'))) : '';
-  const format = req.query.format || (/(xml)/i.test(req.get('content-type') || '') ? 'xml' : /json/i.test(req.get('content-type') || '') ? 'json' : detectFormat(body));
+app.post('/api/render/:templateId', apiKey, admit, rawBody, asyncH(async (req, res) => {
+  // the bytes go to a worker thread as they are; decoding and parsing happen there
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  const head = body.subarray(body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf ? 3 : 0, 4096);
+  const ct = req.get('content-type') || '';
+  const format = req.query.format || (/xml/i.test(ct) ? 'xml' : /json/i.test(ct) ? 'json' : detectFormat(head.toString('latin1')));
   req.body = {};
-  await sendRender(req, res, req.params.templateId, body, format);
+  await sendRender(req, res, req.params.templateId, body, format, charsetOf(ct));
 }));
 
 // POST /api/render   { templateId, data | xml | json, format?, output?: "base64" }
-app.post('/api/render', apiKey, jsonBody, asyncH(async (req, res) => {
+app.post('/api/render', apiKey, admit, jsonBody, asyncH(async (req, res) => {
   const b = req.body || {};
   const templateId = b.templateId ?? b.template ?? req.query.templateId;
   if (templateId === undefined) return res.status(400).json({ error: 'חסר templateId' });
@@ -125,7 +147,7 @@ app.post('/api/render', apiKey, jsonBody, asyncH(async (req, res) => {
 // output: zip (default, PDFs + manifest.json, streamed) | merged (one PDF) | json (base64 per record)
 // fileName: name pattern per record, e.g. "invoice-{{invoice.number}}.pdf"
 const batchBody = express.json({ limit: config.batchBodyLimit });
-app.post('/api/render-batch/:templateId', apiKey, batchBody, asyncH(async (req, res) => {
+app.post('/api/render-batch/:templateId', apiKey, admit, batchBody, asyncH(async (req, res) => {
   const template = store.getTemplate(String(req.params.templateId));
   checkCustomerAccess(req, template);
   const b = req.body || {};
@@ -418,6 +440,10 @@ export function start(port = config.port) {
     if (config.apiKey) console.log('  API key: required');
     else console.warn('  WARNING: FD_API_KEY is not set - the API is open to anyone who can reach this port' + (config.mode === 'render' && store.hasCustomerKeys() ? ' (customer keys are still required for rendering)' : ''));
   });
+  // a request may wait in the render queue: allow long requests
+  server.requestTimeout = config.requestTimeoutMs;
+  server.headersTimeout = 60000;
+  server.keepAliveTimeout = 65000;
   const stop = async () => {
     server.close();
     await closeBrowser();

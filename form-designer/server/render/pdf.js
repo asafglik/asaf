@@ -10,6 +10,7 @@ import { config } from '../config.js';
 import { paginate } from './paginate.js';
 import { buildDocumentHtml } from './html.js';
 import { parseData } from '../data.js';
+import { prepareDocument } from './prepare.js';
 
 function chromeCandidates() {
   const c = [];
@@ -102,7 +103,7 @@ async function acquire() {
 }
 
 /** Run fn(page) on a fresh tab with scripts off, closing it after at most renderTimeoutMs. */
-async function withPage(width, height, fn) {
+async function withPage(width, height, fn, timeoutMs = config.renderTimeoutMs) {
   await acquire();
   let page;
   let timer;
@@ -118,7 +119,7 @@ async function withPage(width, height, fn) {
     });
     await page.setViewport({ width: Math.ceil(width * 3.78) + 2, height: Math.ceil(height * 3.78) + 2 });
     const deadline = new Promise((_, rej) => {
-      timer = setTimeout(() => rej(Object.assign(new Error('זמן ההפקה חרג מהמותר'), { status: 504 })), config.renderTimeoutMs);
+      timer = setTimeout(() => rej(Object.assign(new Error('זמן ההפקה חרג מהמותר'), { status: 504 })), timeoutMs);
     });
     return await Promise.race([fn(page), deadline]);
   } finally {
@@ -136,9 +137,16 @@ function release() {
   else active--;
 }
 
+/** Time allowed for one document: the base timeout plus more for large documents. */
+function timeoutFor(html) {
+  const mb = html.length / 1e6;
+  return Math.min(config.renderTimeoutMs + mb * config.renderTimeoutPerMbMs, config.renderTimeoutMaxMs);
+}
+
 async function htmlToPdf(html, width, height) {
+  const timeoutMs = timeoutFor(html);
   return withPage(width, height, async (page) => {
-    await page.setContent(html, { waitUntil: 'load', timeout: config.renderTimeoutMs });
+    await page.setContent(html, { waitUntil: 'load', timeout: timeoutMs });
     await page.evaluate(() => document.fonts.ready.then(() => true));
     const { map, placeholders, warnings } = await page.evaluate(paginate);
     const pdf = await page.pdf({
@@ -148,10 +156,10 @@ async function htmlToPdf(html, width, height) {
       omitBackground: true,
       preferCSSPageSize: true,
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
-      timeout: config.renderTimeoutMs,
+      timeout: timeoutMs,
     });
     return { pdf: Buffer.from(pdf), map, placeholders, warnings };
-  });
+  }, timeoutMs);
 }
 
 const PT = 72 / 25.4;
@@ -201,11 +209,9 @@ async function mergeBackgrounds(template, overlayBytes, map, width, height) {
  * Render a template with data (object, or XML/JSON text) to a PDF buffer.
  * Returns { pdf, errors, pages }.
  */
-export async function renderPdf(template, data, { format, lang } = {}) {
-  const obj = typeof data === 'string' || Buffer.isBuffer(data)
-    ? parseData(data, { format, arrays: template.schema?.arrays || [] })
-    : data || {};
-  const { html, errors, width, height } = buildDocumentHtml(template, obj, { lang });
+export async function renderPdf(template, data, { format, lang, charset, namePattern, index } = {}) {
+  // parsing and HTML building run on worker threads (see prepare.js)
+  const { html, errors, width, height, name } = await prepareDocument(template, data ?? {}, { format, lang, charset, namePattern, index });
   const { pdf, map, placeholders: phMm, warnings } = await htmlToPdf(html, width, height);
   errors.push(...warnings);
   // positions in mm (top-left origin) and in PDF points (bottom-left origin)
@@ -230,7 +236,7 @@ export async function renderPdf(template, data, { format, lang } = {}) {
     }
     out = Buffer.from(await doc.save());
   }
-  return { pdf: out, errors, pages: map.length, placeholders };
+  return { pdf: out, errors, pages: map.length, placeholders, name };
 }
 
 export async function renderHtml(template, data, { format } = {}) {

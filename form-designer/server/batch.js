@@ -3,20 +3,11 @@
 // thousands never overloads the server or hits the request queue limit.
 import { PDFDocument } from 'pdf-lib';
 import { renderPdf } from './render/pdf.js';
-import { parseData } from './data.js';
 import { config } from './config.js';
-import { interpolate, makeScope } from '../shared/expr.js';
-import { formatValue } from '../shared/format.js';
 
-/** File name for one record from a pattern such as "invoice-{{invoice.number}}.pdf". */
-export function recordFileName(pattern, data, index, used) {
-  let name = '';
-  if (pattern) {
-    try {
-      name = interpolate(String(pattern), makeScope({ ...data, $index: index + 1 }), { escape: (v) => formatValue(v) });
-    } catch { name = ''; }
-  }
-  name = name.replace(/[^\p{L}\p{N}._ -]+/gu, '_').replace(/^[._ ]+/, '').slice(0, 150) || `${String(index + 1).padStart(5, '0')}`;
+/** Safe, unique file name for one record ("name" comes from the file name pattern). */
+export function recordFileName(name, index, used) {
+  name = String(name || '').replace(/[^\p{L}\p{N}._ -]+/gu, '_').replace(/^[._ ]+/, '').slice(0, 150) || `${String(index + 1).padStart(5, '0')}`;
   if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
   // names stay unique inside the ZIP
   let out = name;
@@ -30,22 +21,22 @@ export function recordFileName(pattern, data, index, used) {
  * completion order); the returned array is in input order.
  */
 export async function renderBatch(template, records, { format, lang, fileName, concurrency, onResult } = {}) {
-  const workers = Math.max(1, Math.min(Number(concurrency) || config.maxConcurrent, config.maxConcurrent, records.length));
+  // twice the browser tabs: the next records are parsed while the current ones render
+  const workers = Math.max(1, Math.min(Number(concurrency) || config.maxConcurrent * 2, config.maxConcurrent * 2, records.length));
   const used = new Set();
   const results = new Array(records.length);
   let next = 0;
   const one = async (i) => {
     const started = Date.now();
-    let data;
     let name;
     try {
       const r = records[i];
-      data = typeof r === 'string' ? parseData(r, { format, arrays: template.schema?.arrays || [] }) : r && typeof r === 'object' ? r : {};
-      name = recordFileName(fileName, data, i, used);
+      const data = typeof r === 'string' || (r && typeof r === 'object') ? r : {};
       let out;
       for (let attempt = 0; ; attempt++) {
         try {
-          out = await renderPdf(template, data, { lang });
+          // parsing runs on a worker thread, which also fills in the file name pattern
+          out = await renderPdf(template, data, { format, lang, namePattern: fileName, index: i });
           break;
         } catch (e) {
           // the shared queue is full (other requests): wait and try again
@@ -53,9 +44,10 @@ export async function renderBatch(template, records, { format, lang, fileName, c
           else throw e;
         }
       }
+      name = recordFileName(out.name, i, used);
       return { index: i, fileName: name, ok: true, pages: out.pages, warnings: out.errors, placeholders: out.placeholders, pdf: out.pdf, ms: Date.now() - started };
     } catch (e) {
-      return { index: i, fileName: name || recordFileName('', {}, i, used), ok: false, error: e.status && e.status < 500 ? e.message : e.status === 504 ? e.message : 'שגיאה בהפקה', ms: Date.now() - started };
+      return { index: i, fileName: name || recordFileName('', i, used), ok: false, error: e.status && e.status < 500 ? e.message : e.status === 504 ? e.message : 'שגיאה בהפקה', ms: Date.now() - started };
     }
   };
   await Promise.all(Array.from({ length: workers }, async () => {

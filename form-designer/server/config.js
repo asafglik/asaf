@@ -38,10 +38,20 @@ export const config = {
   chromePath: env.CHROME_PATH || fileCfg.chromePath || '',
   apiKey: env.FD_API_KEY || fileCfg.apiKey || '',
   maxConcurrent: +(env.FD_MAX_CONCURRENT || fileCfg.maxConcurrent || 4),
-  maxQueue: +(env.FD_MAX_QUEUE || fileCfg.maxQueue || 100),
+  maxQueue: +(env.FD_MAX_QUEUE || fileCfg.maxQueue || 5000),
   renderTimeoutMs: +(env.FD_RENDER_TIMEOUT_MS || fileCfg.renderTimeoutMs || 60000),
+  // large documents get more time: + per MB of document HTML, up to a maximum
+  renderTimeoutPerMbMs: +(env.FD_RENDER_TIMEOUT_PER_MB_MS || fileCfg.renderTimeoutPerMbMs || 10000),
+  renderTimeoutMaxMs: +(env.FD_RENDER_TIMEOUT_MAX_MS || fileCfg.renderTimeoutMaxMs || 15 * 60000),
+  // worker threads that parse the data and build the HTML (default: one per core)
+  prepareWorkers: +(env.FD_PREPARE_WORKERS || fileCfg.prepareWorkers || 0),
+  workerMemoryMb: +(env.FD_WORKER_MEMORY_MB || fileCfg.workerMemoryMb || 4096),
+  // request bodies being processed at once (MB); more waits for 503 + Retry-After
+  maxInflightMb: +(env.FD_MAX_INFLIGHT_MB || fileCfg.maxInflightMb || 2048),
+  // HTTP request timeout (queue wait + render), 0 = none
+  requestTimeoutMs: +(env.FD_REQUEST_TIMEOUT_MS ?? fileCfg.requestTimeoutMs ?? 30 * 60000),
   maxImportBytes: +(fileCfg.maxImportBytes || 25 * 1024 * 1024),
-  bodyLimit: env.FD_BODY_LIMIT || fileCfg.bodyLimit || '60mb',
+  bodyLimit: env.FD_BODY_LIMIT || fileCfg.bodyLimit || '60mb', // XML / JSON up to 50MB (+ JSON wrapping)
   // bulk rendering: records per call and request size
   maxBatch: +(env.FD_MAX_BATCH || fileCfg.maxBatch || 10000),
   batchBodyLimit: env.FD_BATCH_BODY_LIMIT || fileCfg.batchBodyLimit || '300mb',

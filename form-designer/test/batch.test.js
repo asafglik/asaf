@@ -45,11 +45,11 @@ function unzip(buf) {
   return out;
 }
 
-test('file name pattern per record stays unique', () => {
+test('file names per record stay unique and safe', () => {
   const used = new Set();
-  assert.equal(recordFileName('inv-{{n}}', { n: 'A/1' }, 0, used), 'inv-A_1.pdf');
-  assert.equal(recordFileName('inv-{{n}}', { n: 'A/1' }, 1, used), 'inv-A_1_2.pdf');
-  assert.equal(recordFileName('', {}, 2, used), '00003.pdf');
+  assert.equal(recordFileName('inv-A/1', 0, used), 'inv-A_1.pdf');
+  assert.equal(recordFileName('inv-A/1', 1, used), 'inv-A_1_2.pdf');
+  assert.equal(recordFileName('', 2, used), '00003.pdf');
 });
 
 test('ZIP with one PDF per record and a manifest', async () => {
