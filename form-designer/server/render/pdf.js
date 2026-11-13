@@ -210,17 +210,24 @@ export async function renderPdf(template, data, { format, lang } = {}) {
   errors.push(...warnings);
   // positions in mm (top-left origin) and in PDF points (bottom-left origin)
   const placeholders = phMm.map((p) => ({
-    name: p.name, baseName: p.baseName, type: p.type, label: p.label, required: p.required, page: p.page,
+    name: p.name, baseName: p.baseName, type: p.type, ...p.meta, label: p.meta?.label ?? p.label, required: p.meta?.required ?? p.required, page: p.page,
     mm: { x: p.x, y: p.y, width: p.width, height: p.height },
     pdf: { x: +(p.x * PT).toFixed(2), y: +((height - p.y - p.height) * PT).toFixed(2), width: +(p.width * PT).toFixed(2), height: +(p.height * PT).toFixed(2) },
   }));
   let out = await mergeBackgrounds(template, pdf, map, width, height);
-  if (out === pdf) {
-    // set document metadata on the plain output as well
-    const doc = await PDFDocument.load(pdf);
-    doc.setTitle(template.name || `Template ${template.id}`);
-    doc.setCreator('Form Designer');
-    doc.setProducer('Form Designer');
+  if (out === pdf || placeholders.length) {
+    const doc = await PDFDocument.load(out);
+    if (out === pdf) {
+      // set document metadata on the plain output as well
+      doc.setTitle(template.name || `Template ${template.id}`);
+      doc.setCreator('Form Designer');
+      doc.setProducer('Form Designer');
+    }
+    // the placeholders travel inside the PDF too (attached file placeholders.json)
+    if (placeholders.length) {
+      const body = JSON.stringify({ templateId: template.id, unit: { mm: 'top-left origin', pdf: 'points, bottom-left origin' }, placeholders }, null, 2);
+      await doc.attach(Buffer.from(body, 'utf8'), 'placeholders.json', { mimeType: 'application/json', description: 'Placeholder names, positions and metadata' });
+    }
     out = Buffer.from(await doc.save());
   }
   return { pdf: out, errors, pages: map.length, placeholders };

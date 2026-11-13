@@ -17,7 +17,7 @@ export const LANGUAGES = {
 };
 
 /** Element properties that hold text to translate. */
-export const TRANSLATABLE = ['text', 'html', 'label', 'prefix', 'suffix', 'emptyText'];
+export const TRANSLATABLE = ['text', 'html', 'label', 'prefix', 'suffix', 'emptyText', 'title', 'subtitle', 'description'];
 /** Table column properties that hold text to translate. */
 export const COL_TRANSLATABLE = ['header', 'footer', 'text', 'prefix', 'suffix', 'emptyText'];
 

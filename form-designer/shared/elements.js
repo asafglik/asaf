@@ -412,6 +412,8 @@ export function elementInnerHtml(el, scope, ctx) {
       return `<div style="position:absolute;inset:0;border:0.75pt dashed ${color};display:flex;align-items:center;justify-content:center;text-align:center;font-size:${fs}pt;color:${color}">${label}</div>`
         + (ctx.design ? `<span class="fd-ph-name">🖼 ${escapeHtml(el.placeholder || '')}</span>` : '');
     }
+    case 'input':
+      return inputHtml(el, scope, ctx);
     case 'checkbox': {
       const v = el.binding ? bindEval(el.binding, scope, ctx) : el.expression ? safeEval(el.expression, scope, ctx) : false;
       const on = isTrueValue(v);
@@ -463,10 +465,11 @@ export function elementHtml(el, scope, ctx) {
   if (!isVisible(el, scope, ctx)) return '';
   const attrs = [`class="fd-el fd-${el.type}"`, `data-id="${escapeHtml(el.id)}"`, `style="${escapeHtml(elementOuterCss(el))}"`];
   if (el.showOn && el.showOn !== 'all') attrs.push(`data-show-on="${escapeHtml(el.showOn)}"`);
-  if (el.type === 'signature' || el.type === 'upload') {
+  if (isPlaceholder(el)) {
     attrs.push(`data-ph="${escapeHtml(el.placeholder || el.id)}"`, `data-ph-type="${el.type}"`);
     if (el.label) attrs.push(`data-ph-label="${escapeHtml(el.label)}"`);
     if (el.required) attrs.push('data-ph-required="1"');
+    attrs.push(`data-ph-meta="${escapeHtml(JSON.stringify(placeholderRuntime(el, scope, ctx)))}"`);
   }
   if (el.type === 'table' || el.type === 'richtext') {
     if (el.overflow === 'paginate') {
@@ -511,12 +514,85 @@ export function bandElements(template, pageHeight) {
   return out;
 }
 
-/** Signature / upload placeholders declared in a template (design-time positions). */
+// ---------------------------------------------------------------- placeholders
+// Areas filled in after the PDF is produced (signature, image upload, text / date /
+// checkbox input). Their name, position and metadata are returned by the API.
+export const PLACEHOLDER_TYPES = ['signature', 'upload', 'input'];
+export const INPUT_TYPES = ['text', 'date', 'checkbox'];
+export function isPlaceholder(el) {
+  return PLACEHOLDER_TYPES.includes(el?.type);
+}
+export const PLACEHOLDER_KIND_LABELS = { signature: 'חתימה', upload: 'העלאת תמונה', text: 'טקסט', date: 'תאריך', checkbox: 'תיבת סימון' };
+export function inputTypeOf(el) {
+  return INPUT_TYPES.includes(el.inputType) ? el.inputType : 'text';
+}
+
+/** Metadata defined in the designer (title, subtitle, required, description...). */
+export function placeholderMeta(el) {
+  const m = {
+    kind: el.type === 'input' ? inputTypeOf(el) : el.type,
+    title: el.title || el.label || '',
+    subtitle: el.subtitle || '',
+    description: el.description || '',
+    required: !!el.required,
+    label: el.label || '',
+  };
+  if (el.type === 'signature') m.signer = el.signer || '';
+  if (el.type === 'input' && m.kind === 'date') m.format = dateFormatOf(el);
+  if (el.binding) m.binding = el.binding;
+  return m;
+}
+
+function dateFormatOf(el) {
+  const f = String(el.format || '').trim();
+  return f.startsWith('date') ? f.replace(/^date:?/, '') || 'dd/MM/yyyy' : 'dd/MM/yyyy';
+}
+
+/** The value the area got from the data when the PDF was produced. */
+function placeholderValue(el, scope, ctx) {
+  const quiet = { ...ctx, errors: [] };
+  const v = el.binding ? bindEval(el.binding, scope, quiet) : '';
+  if (el.type === 'signature' || el.type === 'upload') return { filled: !!imageSrc(v) };
+  const kind = inputTypeOf(el);
+  if (kind === 'checkbox') return { value: v === '' || v === undefined || v === null ? false : isTrueValue(v), filled: v !== '' && v !== undefined && v !== null };
+  const str = kind === 'date' ? formatValue(v, 'date:' + dateFormatOf(el)) : formatValue(v, el.format);
+  return { value: str, filled: str !== '' };
+}
+
+function placeholderRuntime(el, scope, ctx) {
+  return { ...placeholderMeta(el), ...placeholderValue(el, scope, ctx) };
+}
+
+function inputHtml(el, scope, ctx) {
+  const st = el.style || {};
+  const kind = inputTypeOf(el);
+  const { value, filled } = placeholderValue(el, scope, ctx);
+  const frame = el.printFrame !== false || ctx.design;
+  const color = st.color || '#4b5563';
+  const fs = n(st.fontSize, 10);
+  const lfs = n(st.labelSize, Math.max(6, +(fs * 0.75).toFixed(1)));
+  const label = el.label ? escapeHtml(el.label) + (el.required && frame ? ' <span style="color:#dc2626">*</span>' : '') : '';
+  const badge = ctx.design ? `<span class="fd-ph-name">✎ ${escapeHtml(el.placeholder || '')}</span>` : '';
+  if (kind === 'checkbox') {
+    const size = Math.min(n(el.h), n(st.boxSize, 4.5));
+    if (!frame && !filled) return badge;
+    return `<div style="position:absolute;inset:0;display:flex;align-items:center;gap:1.5mm;font-size:${lfs}pt;color:${color}">`
+      + `<span style="flex:none;width:${size}mm;height:${size}mm;border:0.75pt solid ${st.borderColor || '#000'};display:inline-flex;align-items:center;justify-content:center;font-size:${size * 2}pt;line-height:1;color:#000;box-sizing:border-box">${value === true ? '✓' : ''}</span>`
+      + (label ? `<span style="white-space:nowrap;overflow:hidden">${label}</span>` : '') + `</div>${badge}`;
+  }
+  if (!frame && !filled) return badge;
+  const hint = !filled && kind === 'date' && frame ? `<span style="color:#b6bcc6">${escapeHtml(dateFormatOf(el).replace(/[dMyHhms]/g, '_'))}</span>` : '';
+  return `<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:0 0.5mm">`
+    + (label && frame ? `<div style="font-size:${lfs}pt;color:${color};line-height:1.25;white-space:nowrap;overflow:hidden">${label}</div>` : '')
+    + `<div style="${frame ? `border-bottom:0.75pt solid ${color};` : ''}font-size:${fs}pt;color:#000;line-height:1.35;min-height:${(fs * 1.35 * 25.4) / 72}mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${filled ? escapeText(value) : hint}</div></div>${badge}`;
+}
+
+/** Placeholders declared in a template (design-time positions). */
 export function templatePlaceholders(template, pageWidth, pageHeight) {
   const PT = 72 / 25.4;
   const list = [];
   const add = (el, page, yOffset = 0, band = null) => {
-    if (el.type !== 'signature' && el.type !== 'upload') return;
+    if (!isPlaceholder(el)) return;
     const x = n(el.x);
     const y = n(el.y) + yOffset;
     const w = n(el.w);
@@ -524,9 +600,7 @@ export function templatePlaceholders(template, pageWidth, pageHeight) {
     list.push({
       name: el.placeholder || el.id,
       type: el.type,
-      label: el.label || '',
-      required: !!el.required,
-      signer: el.signer || '',
+      ...placeholderMeta(el),
       page,
       band,
       showOn: el.showOn || 'all',

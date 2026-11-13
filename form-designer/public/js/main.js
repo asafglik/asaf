@@ -14,7 +14,7 @@ import { renderTree, allValuePaths, arrayPaths } from './datatree.js';
 import { TOOLS, createElement } from './factory.js';
 import { ensureBackground, inspectPdf } from './pdfimport.js';
 import { readFileAsText, readDataFile, fileToBase64, download } from './util.js';
-import { escapeHtml, MM } from '/shared/elements.js';
+import { escapeHtml, MM, PLACEHOLDER_KIND_LABELS } from '/shared/elements.js';
 import { FORMAT_PRESETS } from '/shared/format.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -138,14 +138,14 @@ $('#tools').addEventListener('dragstart', (ev) => {
   const b = ev.target.closest('.tool');
   if (!b) return;
   const t = TOOLS[+b.dataset.tool];
-  ev.dataTransfer.setData('application/x-fd-tool', JSON.stringify({ type: t.type, symbology: t.symbology }));
+  ev.dataTransfer.setData('application/x-fd-tool', JSON.stringify({ type: t.type, symbology: t.symbology, inputType: t.inputType }));
   ev.dataTransfer.effectAllowed = 'copy';
 });
 $('#tools').addEventListener('click', (ev) => {
   const b = ev.target.closest('.tool');
   if (!b) return;
   const t = TOOLS[+b.dataset.tool];
-  addElement(createElement(t.type, { symbology: t.symbology }));
+  addElement(createElement(t.type, { symbology: t.symbology, inputType: t.inputType }));
 });
 
 // tabs
@@ -570,14 +570,14 @@ async function placeholdersDialog() {
   const { templatePlaceholders } = await import('/shared/elements.js');
   const { w, h } = pageSizeMm();
   const list = templatePlaceholders(fullTemplate(), w, h);
-  const rows = list.map((p) => `<tr><td><code dir="ltr">${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'העלאת תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td><bdi>${p.mm.x}, ${p.mm.y}</bdi></td><td><bdi>${p.mm.width} × ${p.mm.height}</bdi></td><td><bdi>${p.pdf.x}, ${p.pdf.y}</bdi></td></tr>`).join('');
+  const rows = list.map((p) => `<tr><td><code dir="ltr">${escapeHtml(p.name)}</code></td><td>${PLACEHOLDER_KIND_LABELS[p.kind || p.type] || p.type}</td><td>${escapeHtml(p.title || p.label)}${p.subtitle ? `<div class="muted">${escapeHtml(p.subtitle)}</div>` : ''}</td><td>${p.required ? 'כן' : ''}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td><bdi>${p.mm.x}, ${p.mm.y}</bdi></td><td><bdi>${p.mm.width} × ${p.mm.height}</bdi></td><td><bdi>${p.pdf.x}, ${p.pdf.y}</bdi></td></tr>`).join('');
   await openDialog({
-    title: 'אזורי חתימה ואזורי העלאת תמונה',
+    title: 'אזורי מילוי, חתימה ותמונה',
     wide: true,
-    html: list.length ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>תווית</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה (מ"מ)</th><th>X, Y (נק' PDF)</th></tr></thead><tbody>${rows}</tbody></table>
+    html: list.length ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>כותרת</th><th>חובה</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה (מ"מ)</th><th>X, Y (נק' PDF)</th></tr></thead><tbody>${rows}</tbody></table>
       <p class="hint">המיקום במ"מ נמדד מהפינה השמאלית העליונה של הדף. נקודות PDF נמדדות מהפינה השמאלית התחתונה (כמו בספריות חתימה דיגיטלית).<br>
-      ב-API: <code dir="ltr">GET /api/templates/${escapeHtml(state.template.id || '{id}')}/placeholders</code>, וגם בתשובה לשמירת התבנית. בהפקה עם <code dir="ltr">output=json</code> מוחזרים המיקומים בפועל בכל עמוד (גם אחרי מעבר עמודים).</p>`
-      : '<p class="muted">אין בתבנית אזורי חתימה או העלאת תמונה. הוסיפו אותם מסרגל הרכיבים.</p>',
+      ב-API: <code dir="ltr">GET /api/templates/${escapeHtml(state.template.id || '{id}')}/placeholders</code>, וגם בתשובה לשמירת התבנית. בהפקה עם <code dir="ltr">output=json</code> מוחזרים המיקומים בפועל בכל עמוד (גם אחרי מעבר עמודים), עם הכותרות, החובה, התיאור והערך שהתקבל. אותם נתונים מצורפים גם לקובץ ה-PDF עצמו כקובץ <code dir="ltr">placeholders.json</code>.</p>`
+      : '<p class="muted">אין בתבנית אזורי מילוי, חתימה או העלאת תמונה. הוסיפו אותם מסרגל הרכיבים.</p>',
     buttons: [{ label: 'סגירה', primary: true }],
   });
 }

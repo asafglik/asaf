@@ -1,7 +1,7 @@
 // Properties panel for the selected element(s), or the page when nothing is selected.
 import { state, on, change, selectedElements, currentPage, uid, emit, pageSizeMm, canvasSizeMm, allContainers, pageMargins, editLang, isTranslating, isTranslatable, getText, setText } from './state.js';
 import { LANGUAGES, baseLanguage, templateLanguages, missingTranslations } from '/shared/i18n.js';
-import { escapeHtml, PAGE_SIZES } from '/shared/elements.js';
+import { escapeHtml, PAGE_SIZES, inputTypeOf } from '/shared/elements.js';
 import { FORMAT_PRESETS } from '/shared/format.js';
 import { validateExpr, tryEval, FUNCTION_HELP, exprPath } from '/shared/expr.js';
 import { TYPE_LABELS } from './factory.js';
@@ -282,26 +282,41 @@ const CONTENT = {
   ]),
 };
 CONTENT.ellipse = CONTENT.rect;
-const placeholderGroup = (kind) => group(kind === 'signature' ? 'אזור חתימה' : 'אזור העלאת תמונה', [
+const metaGroup = group('נתוני האזור (מוחזרים ב-API)', [
+  fields.text('כותרת ראשית', 'title', { placeholder: 'למשל: אישור הלקוח' }),
+  fields.text('כותרת משנית', 'subtitle', { placeholder: 'למשל: לאחר קבלת הרכב' }),
+  fields.area('תיאור', 'description', { rows: 2, placeholder: 'הסבר למי שממלא: מה לכתוב / לחתום כאן' }),
+  fields.check('חובה', 'required'),
+  fields.html('<p class="hint">הנתונים לא מודפסים. הם מוחזרים עם שם האזור והמיקום שלו ב-API של התבנית, בתשובת ההפקה (<code dir="ltr">output=json</code>) ובקובץ <code dir="ltr">placeholders.json</code> המצורף ל-PDF.</p>'),
+]);
+const placeholderGroup = (kind) => group({ signature: 'אזור חתימה', upload: 'אזור העלאת תמונה', input: 'שדה למילוי' }[kind], [
+  ...(kind === 'input' ? [fields.segmented('סוג', 'inputType', [['text', 'טקסט'], ['date', 'תאריך'], ['checkbox', 'תיבת סימון']], 'text')] : []),
   (els) => {
     const v = val(els, 'placeholder');
     const dup = v && allContainers().some((c) => (c.elements || []).some((e) => e.placeholder === v && !els.includes(e)));
     return `<label class="f"><span>שם האזור (מזהה ב-API)</span><input type="text" data-key="placeholder" value="${escapeHtml(v)}" dir="ltr" placeholder="${kind}_1"></label>${dup ? '<div class="expr-err">השם כבר בשימוש ברכיב אחר</div>' : ''}`;
   },
-  fields.text('תווית', 'label', { placeholder: kind === 'signature' ? 'חתימת הלקוח' : 'צילום תעודת זהות' }),
+  fields.text('תווית מודפסת', 'label', { placeholder: { signature: 'חתימת הלקוח', upload: 'צילום תעודת זהות', input: 'שם מלא' }[kind] }),
   ...(kind === 'signature' ? [fields.text('חותם', 'signer', { placeholder: 'לקוח / נציג / ערב' })] : []),
-  fields.check('חובה', 'required'),
   fields.check('הדפס מסגרת ותווית ב-PDF', 'printFrame', true),
-  fields.text('תמונה מהנתונים (אם קיימת)', 'binding', { list: 'dl-paths', placeholder: 'customer.signature' }),
-  fields.select('התאמת תמונה', 'fit', [['contain', 'התאם (שמור יחס)'], ['cover', 'מלא וחתוך'], ['fill', 'מתח']], 'contain'),
+  ...(kind === 'input'
+    ? [
+      fields.text('ערך מעולם הנתונים (מילוי מראש)', 'binding', { list: 'dl-paths', placeholder: 'customer.name' }),
+      (els) => (inputTypeOf(els[0]) === 'date' ? fields.format('פורמט תאריך', 'format')(els) : ''),
+    ]
+    : [
+      fields.text('תמונה מהנתונים (אם קיימת)', 'binding', { list: 'dl-paths', placeholder: 'customer.signature' }),
+      fields.select('התאמת תמונה', 'fit', [['contain', 'התאם (שמור יחס)'], ['cover', 'מלא וחתוך'], ['fill', 'מתח']], 'contain'),
+    ]),
   fields.html('<div class="f-grid">'),
-  fields.num('גודל תווית', 'style.fontSize', { step: 0.5, min: 5, suffix: 'pt', dflt: 8 }),
+  fields.num(kind === 'input' ? 'גודל טקסט' : 'גודל תווית', 'style.fontSize', { step: 0.5, min: 5, suffix: 'pt', dflt: kind === 'input' ? 10 : 8 }),
   fields.color('צבע', 'style.color', { allowEmpty: false }),
   fields.html('</div>'),
   fields.html('<p class="hint">שם ה-placeholder, המיקום (X, Y) והגודל מוחזרים ב-API של התבנית ובתשובת ההפקה (<code dir="ltr">output=json</code>), במ"מ ובנקודות PDF.</p>'),
 ]);
-CONTENT.signature = placeholderGroup('signature');
-CONTENT.upload = placeholderGroup('upload');
+CONTENT.signature = (els) => placeholderGroup('signature')(els) + metaGroup(els);
+CONTENT.upload = (els) => placeholderGroup('upload')(els) + metaGroup(els);
+CONTENT.input = (els) => placeholderGroup('input')(els) + metaGroup(els);
 
 // ---------------------------------------------------------------- table
 function tableGroups(el) {
@@ -492,7 +507,7 @@ export function renderProps() {
     if (type === 'table') parts.push(...tableGroups(els[0]));
     else if (CONTENT[type]) parts.push(CONTENT[type]);
     if (['text', 'field', 'computed', 'richtext'].includes(type)) parts.push(fontGroup(type !== 'richtext'));
-    if (['text', 'field', 'computed', 'richtext', 'image', 'barcode', 'signature', 'upload'].includes(type)) parts.push(boxGroup);
+    if (['text', 'field', 'computed', 'richtext', 'image', 'barcode', 'signature', 'upload', 'input'].includes(type)) parts.push(boxGroup);
   }
   parts.push(geometry, behavior);
   html += parts.map((p) => p(els)).join('');

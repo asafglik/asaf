@@ -85,7 +85,7 @@ function deepMerge(target, src) {
   return target;
 }
 
-const TYPES = new Set(['text', 'field', 'computed', 'richtext', 'table', 'image', 'barcode', 'checkbox', 'signature', 'upload', 'line', 'rect', 'ellipse']);
+const TYPES = new Set(['text', 'field', 'computed', 'richtext', 'table', 'image', 'barcode', 'checkbox', 'signature', 'upload', 'input', 'line', 'rect', 'ellipse']);
 
 function normalizeElement(raw) {
   if (!TYPES.has(raw.type)) return null;
@@ -96,7 +96,7 @@ function normalizeElement(raw) {
   el.id = uid();
   for (const k of ['x', 'y', 'w', 'h']) el[k] = Math.round((Number(el[k]) || 0) * 10) / 10;
   if (el.type === 'table') el.columns = (el.columns || []).map((c) => ({ id: uid('c'), width: 1, ...c }));
-  if ((el.type === 'signature' || el.type === 'upload') && (!el.placeholder || placeholderTaken(el.placeholder))) {
+  if ((el.type === 'signature' || el.type === 'upload' || el.type === 'input') && (!el.placeholder || placeholderTaken(el.placeholder))) {
     el.placeholder = uniquePlaceholder(el.type);
   }
   return el;

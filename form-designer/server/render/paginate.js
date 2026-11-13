@@ -227,7 +227,10 @@ export function paginate() {
       const base = el.getAttribute('data-ph');
       const name = seen.has(base) ? `${base}_p${i + 1}` : base;
       seen.add(base);
+      let meta = {};
+      try { meta = JSON.parse(el.getAttribute('data-ph-meta') || '{}'); } catch { meta = {}; }
       placeholders.push({
+        meta,
         name,
         baseName: base,
         type: el.getAttribute('data-ph-type'),

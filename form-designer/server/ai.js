@@ -40,6 +40,8 @@ Types:
 - checkbox: { binding } ticked when the value is true/1/Y/כן/X
 - signature: { placeholder: "unique_name", label: "חתימת הלקוח", signer?, required? } a signature area (line + label). placeholder names: lowercase latin letters, digits and _.
 - upload: { placeholder: "unique_name", label } an area where an image will be uploaded later.
+- input: { inputType: "text|date|checkbox", placeholder: "unique_name", label, title?, subtitle?, description?, required?, binding? } a blank to be filled in after printing (a line with a caption, a date, or a tick box with text). Use it for empty blanks that no data field fills.
+  signature / upload / input may also carry title, subtitle, description, required: metadata returned by the API, not printed.
 - line: { orientation: "horizontal|vertical", thickness (pt), color }   (horizontal line: h = 1)
 - rect / ellipse: { fill, borderWidth, borderColor, radius }
 Formats: number:2, plain:0, currency, currency:USD, percent:1, date:dd/MM/yyyy, date:d MMMM yyyy, datetime, upper, bool:כן/לא

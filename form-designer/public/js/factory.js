@@ -12,6 +12,9 @@ export const TOOLS = [
   { type: 'barcode', label: 'QR', icon: '▣', hint: 'QR, DataMatrix, PDF417', symbology: 'qrcode', key: 'qr' },
   { type: 'signature', label: 'אזור חתימה', icon: '✍', hint: 'מקום לחתימה – מיקומו מוחזר ב-API' },
   { type: 'upload', label: 'אזור העלאת תמונה', icon: '⬚', hint: 'מקום להעלאת תמונה – מיקומו מוחזר ב-API' },
+  { type: 'input', label: 'שדה טקסט למילוי', icon: '✎', hint: 'מקום למילוי טקסט – מיקומו ונתוניו מוחזרים ב-API', inputType: 'text' },
+  { type: 'input', label: 'שדה תאריך למילוי', icon: '📅', hint: 'מקום למילוי תאריך – מיקומו ונתוניו מוחזרים ב-API', inputType: 'date' },
+  { type: 'input', label: 'תיבת סימון למילוי', icon: '☐', hint: 'תיבה לסימון בחתימה – מיקומה ונתוניה מוחזרים ב-API', inputType: 'checkbox' },
   { type: 'checkbox', label: 'תיבת סימון', icon: '☑', hint: 'מסומנת לפי ערך' },
   { type: 'line', label: 'קו', icon: '—', hint: 'קו אופקי או אנכי' },
   { type: 'rect', label: 'מלבן', icon: '▭', hint: 'מסגרת / רקע' },
@@ -20,7 +23,7 @@ export const TOOLS = [
 
 export const TYPE_LABELS = {
   text: 'טקסט קבוע', field: 'שדה נתונים', computed: 'שדה מחושב', richtext: 'טקסט מעוצב', table: 'טבלה',
-  image: 'תמונה', barcode: 'ברקוד', checkbox: 'תיבת סימון', signature: 'אזור חתימה', upload: 'אזור העלאת תמונה', line: 'קו', rect: 'מלבן', ellipse: 'אליפסה',
+  image: 'תמונה', barcode: 'ברקוד', checkbox: 'תיבת סימון', signature: 'אזור חתימה', upload: 'אזור העלאת תמונה', input: 'שדה למילוי', line: 'קו', rect: 'מלבן', ellipse: 'אליפסה',
 };
 
 const baseStyle = () => ({ fontFamily: 'Heebo', fontSize: 11, color: '#000000', align: 'right', valign: 'top', direction: 'rtl' });
@@ -78,6 +81,19 @@ export function createElement(type, opts = {}) {
     case 'upload':
       Object.assign(e, { w: 40, h: 40, placeholder: opts.placeholder || uniquePlaceholder('upload'), label: opts.label ?? 'העלאת תמונה', required: false, binding: '', fit: 'contain', style: { fontSize: 8, color: '#6b7280', padding: 0 } });
       break;
+    case 'input': {
+      const kind = ['text', 'date', 'checkbox'].includes(opts.inputType) ? opts.inputType : 'text';
+      const base = { text: 'text', date: 'date', checkbox: 'check' }[kind];
+      const label = { text: 'שם מלא', date: 'תאריך', checkbox: 'אני מאשר/ת את התנאים' }[kind];
+      Object.assign(e, {
+        w: kind === 'checkbox' ? 60 : kind === 'date' ? 35 : 60, h: kind === 'checkbox' ? 6 : 11,
+        inputType: kind, placeholder: opts.placeholder || uniquePlaceholder(base), label: opts.label ?? label,
+        title: '', subtitle: '', description: '', required: false, binding: opts.binding || '',
+        ...(kind === 'date' ? { format: 'date:dd/MM/yyyy' } : {}),
+        style: { fontSize: 10, color: '#4b5563', padding: 0 },
+      });
+      break;
+    }
     case 'checkbox':
       Object.assign(e, { w: 5, h: 5, binding: opts.binding || '', style: { borderWidth: 0.75, borderColor: '#000000' } });
       break;

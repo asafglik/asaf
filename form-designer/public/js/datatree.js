@@ -148,7 +148,7 @@ panel.addEventListener('click', (ev) => {
     if (inTable) el.columns.push({ id: 'c' + Math.random().toString(36).slice(2, 8), header: n.name.replace(/^@/, ''), binding: n.path, width: 1 });
     else if (el.type === 'field' || el.type === 'checkbox') el.binding = abs;
     else if (el.type === 'image') { el.source = 'field'; el.binding = abs; }
-    else if (el.type === 'signature' || el.type === 'upload') el.binding = abs;
+    else if (el.type === 'signature' || el.type === 'upload' || el.type === 'input') el.binding = abs;
     else if (el.type === 'barcode') { el.valueMode = 'field'; el.binding = abs; }
     else if (el.type === 'table' && n.kind === 'array') el.binding = n.path;
     else if (el.type === 'text') el.text = (el.text || '') + `{{${exprPath(abs)}}}`;

@@ -497,7 +497,7 @@ function dropOnElement(el, n) {
     if (el.type === 'text') el.text = (el.text || '') + `{{${exprPath(full)}}}`;
     else if (el.type === 'richtext') el.html = (el.html || '').replace(/(<\/p>)?\s*$/, ` {{${exprPath(full)}}}$1`);
     else if (el.type === 'computed') el.expression = (el.expression || '') + exprPath(full);
-    else if (el.type === 'image' || el.type === 'signature' || el.type === 'upload') { el.binding = full; if (el.type === 'image') el.source = 'field'; }
+    else if (el.type === 'image' || el.type === 'signature' || el.type === 'upload' || el.type === 'input') { el.binding = full; if (el.type === 'image') el.source = 'field'; }
     else if (el.type === 'barcode') { el.valueMode = 'field'; el.binding = full; }
     else el.binding = full;
   });

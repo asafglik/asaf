@@ -1,7 +1,7 @@
 // Template management: list, edit, duplicate, delete, link to customers;
 // customers with their API keys and installation bundles.
 import { api } from './api.js';
-import { escapeHtml } from '/shared/elements.js';
+import { escapeHtml, PLACEHOLDER_KIND_LABELS } from '/shared/elements.js';
 import { readFileAsText, download } from './util.js';
 import { startTour, firstVisit } from './tour.js';
 import { MANAGE_TOUR } from './tour-steps.js';
@@ -150,12 +150,12 @@ async function previewTemplate(id) {
 
 async function showPlaceholders(id) {
   const r = await api.get(`/api/templates/${encodeURIComponent(id)}/placeholders`);
-  const rows = r.placeholders.map((p) => `<tr><td><code dir="ltr">${escapeHtml(p.name)}</code></td><td>${p.type === 'signature' ? 'חתימה' : 'העלאת תמונה'}</td><td>${escapeHtml(p.label)}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td><bdi>${p.mm.x}, ${p.mm.y}</bdi></td><td><bdi>${p.mm.width} × ${p.mm.height}</bdi></td></tr>`).join('');
+  const rows = r.placeholders.map((p) => `<tr><td><code dir="ltr">${escapeHtml(p.name)}</code></td><td>${PLACEHOLDER_KIND_LABELS[p.kind || p.type] || p.type}</td><td>${escapeHtml(p.title || p.label)}${p.subtitle ? `<div class="muted">${escapeHtml(p.subtitle)}</div>` : ''}</td><td>${p.required ? 'כן' : ''}</td><td>${p.band ? (p.band === 'header' ? 'כותרת עליונה' : 'כותרת תחתונה') : p.page}</td><td><bdi>${p.mm.x}, ${p.mm.y}</bdi></td><td><bdi>${p.mm.width} × ${p.mm.height}</bdi></td></tr>`).join('');
   await openDialog({
-    title: `אזורי חתימה ותמונה – תבנית ${id}`,
+    title: `אזורי מילוי, חתימה ותמונה – תבנית ${id}`,
     wide: true,
     html: r.placeholders.length
-      ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>תווית</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה</th></tr></thead><tbody>${rows}</tbody></table>
+      ? `<table class="help-table ph-table"><thead><tr><th>שם</th><th>סוג</th><th>כותרת</th><th>חובה</th><th>עמוד</th><th>X, Y (מ"מ)</th><th>רוחב × גובה</th></tr></thead><tbody>${rows}</tbody></table>
          <pre dir="ltr">GET /api/templates/${escapeHtml(id)}/placeholders</pre>`
       : '<p class="muted">אין בתבנית אזורי חתימה או העלאת תמונה.</p>',
     buttons: [{ label: 'סגירה', primary: true }],
@@ -196,7 +196,7 @@ $('#tpl-table').addEventListener('click', async (ev) => {
         pop.style.left = `${Math.max(8, r.left)}px`;
         if (window.innerHeight - r.bottom < 230) pop.style.bottom = `${window.innerHeight - r.top + 4}px`;
         else pop.style.top = `${r.bottom + 4}px`;
-        pop.innerHTML = `<button data-act="preview">תצוגה מקדימה PDF</button><button data-act="link">שיוך ללקוחות</button><button data-act="placeholders">אזורי חתימה ותמונה</button><button data-act="export">ייצוא (JSON)</button><hr><button data-act="delete" class="danger">מחיקה</button>`;
+        pop.innerHTML = `<button data-act="preview">תצוגה מקדימה PDF</button><button data-act="link">שיוך ללקוחות</button><button data-act="placeholders">אזורי מילוי, חתימה ותמונה</button><button data-act="export">ייצוא (JSON)</button><hr><button data-act="delete" class="danger">מחיקה</button>`;
         b.parentElement.appendChild(pop);
         break;
       }
