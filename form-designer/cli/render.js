@@ -27,7 +27,8 @@ const { renderPdf, closeBrowser } = await import('../server/render/pdf.js');
 
 try {
   const template = args['template-file'] ? JSON.parse(fs.readFileSync(args['template-file'], 'utf8')) : getTemplate(String(args.template));
-  const data = !args.data ? '{}' : args.data === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(args.data, 'utf8');
+  const { decodeBytes } = await import('../shared/encoding.js');
+  const data = !args.data ? '{}' : decodeBytes(fs.readFileSync(args.data === '-' ? 0 : args.data));
   const { pdf, errors, pages } = await renderPdf(template, data, { format: args.format });
   const out = args.out || `${template.id || 'out'}.pdf`;
   fs.writeFileSync(out, pdf);

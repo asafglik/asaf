@@ -1,6 +1,6 @@
 // The data world panel: the structure of the sample XML/JSON as a tree.
 // Drag a field onto the page to create a data field, or a list to create a table.
-import { state, on, selectedElements, change } from './state.js';
+import { state, on, selectedElements, change, emit } from './state.js';
 import { escapeHtml } from '/shared/elements.js';
 import { exprPath } from '/shared/expr.js';
 
@@ -50,6 +50,8 @@ export function itemPaths(arrayPath) {
 
 const KIND_ICON = { object: '📁', array: '☰', value: '•' };
 
+const isXml = () => state.template?.schema?.format === 'xml';
+
 function nodeHtml(n, depth, arrayPath) {
   const inArr = arrayPath !== null;
   const name = n.name || 'שורש';
@@ -61,6 +63,8 @@ function nodeHtml(n, depth, arrayPath) {
     <div class="dt-row" draggable="true" title="${escapeHtml(title)}" style="padding-inline-start:${depth * 12 + 6}px">
       ${n.kind !== 'value' && kids ? '<button class="dt-toggle" aria-label="פתח/סגור">▾</button>' : '<span class="dt-toggle-sp"></span>'}
       <span class="dt-icon">${KIND_ICON[n.kind]}</span><span class="dt-name">${escapeHtml(name)}</span>${meta}
+      ${isXml() && n.kind === 'object' ? '<button class="dt-list" data-list="on" title="סימון כרשימה (חוזר על עצמו) – גם כשבדוגמה יש פריט אחד">☰+</button>' : ''}
+      ${isXml() && n.kind === 'array' ? '<button class="dt-list" data-list="off" title="ביטול סימון כרשימה">☰−</button>' : ''}
     </div>
     ${kids ? `<ul>${kids}</ul>` : ''}
   </li>`;
@@ -74,11 +78,13 @@ export function renderTree() {
     panel.innerHTML = '<div class="empty-hint">עדיין לא הוגדר עולם נתונים.<br><button class="btn btn-primary" data-action="data">טעינת XML / JSON</button></div>';
     return;
   }
-  const index = (n, arrayPath) => {
-    nodeIndex.set(`${arrayPath ?? ''}::${n.path}`, { ...n, rel: arrayPath !== null, arrayPath });
-    for (const c of n.children || []) index(c, n.kind === 'array' ? n.path : arrayPath);
+  // absPath: the full XML path (used for the list markings in schema.arrays)
+  const index = (n, arrayPath, absBase) => {
+    const absPath = absBase ? `${absBase}.${n.path}` : n.path;
+    nodeIndex.set(`${arrayPath ?? ''}::${n.path}`, { ...n, rel: arrayPath !== null, arrayPath, absPath });
+    for (const c of n.children || []) index(c, n.kind === 'array' ? n.path : arrayPath, n.kind === 'array' ? absPath : absBase);
   };
-  index(state.tree, null);
+  index(state.tree, null, null);
   const fmt = state.template?.schema?.format?.toUpperCase() || '';
   panel.innerHTML = `<div class="dt-head">${fmt ? `<span class="badge">${escapeHtml(fmt)}</span>` : ''}<button class="link" data-action="data">שינוי</button></div><ul class="dt-root">${(state.tree.children || []).map((c) => nodeHtml(c, 0, null)).join('')}</ul>`;
   applyFilter();
@@ -108,6 +114,20 @@ panel.addEventListener('dragstart', (ev) => {
 });
 
 panel.addEventListener('click', (ev) => {
+  const lb = ev.target.closest('.dt-list');
+  if (lb) {
+    ev.stopPropagation();
+    const n = nodeOf(lb.closest('.dt-node'));
+    if (!n) return;
+    change((t) => {
+      const set = new Set(t.schema.arrays || []);
+      if (lb.dataset.list === 'on') set.add(n.absPath);
+      else set.delete(n.absPath);
+      t.schema = { ...t.schema, arrays: [...set] };
+    }, 'meta');
+    emit('reparse');
+    return;
+  }
   const tg = ev.target.closest('.dt-toggle');
   if (tg) {
     tg.closest('.dt-node').classList.toggle('collapsed');

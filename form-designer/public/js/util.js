@@ -7,6 +7,13 @@ export function readFileAsDataUrl(file) {
   });
 }
 
+import { decodeBytes } from '/shared/encoding.js';
+
+/** A data file (XML / JSON) as text, honouring its encoding (e.g. windows-1255). */
+export async function readDataFile(file) {
+  return decodeBytes(new Uint8Array(await file.arrayBuffer()));
+}
+
 export function readFileAsText(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();

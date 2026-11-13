@@ -16,6 +16,7 @@ import { templatePlaceholders } from '../shared/elements.js';
 import { pageSize } from './render/html.js';
 import { autoDesign, designRequest, aiAvailable } from './ai.js';
 import { sanitizeTemplate } from './sanitize.js';
+import { decodeBytes, charsetOf } from '../shared/encoding.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -66,7 +67,8 @@ function withPlaceholders(t) {
 const asyncH = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 // ------------------------------------------------------------- render API
-const rawBody = express.text({ type: () => true, limit: config.bodyLimit });
+// raw bytes: legacy systems send windows-1255 XML, decoded by charset / XML declaration
+const rawBody = express.raw({ type: () => true, limit: config.bodyLimit });
 const jsonBody = express.json({ limit: config.bodyLimit });
 
 function pdfFileName(req, template) {
@@ -96,7 +98,7 @@ async function sendRender(req, res, templateId, data, format) {
 
 // POST /api/render/1001   body = XML or JSON data as-is
 app.post('/api/render/:templateId', apiKey, rawBody, asyncH(async (req, res) => {
-  const body = typeof req.body === 'string' ? req.body : '';
+  const body = Buffer.isBuffer(req.body) ? decodeBytes(req.body, charsetOf(req.get('content-type'))) : '';
   const format = req.query.format || (/(xml)/i.test(req.get('content-type') || '') ? 'xml' : /json/i.test(req.get('content-type') || '') ? 'json' : detectFormat(body));
   req.body = {};
   await sendRender(req, res, req.params.templateId, body, format);
@@ -247,9 +249,9 @@ if (full) {
 
   // parse a data sample (XML/JSON) -> data + tree + array paths
   app.post('/api/data/parse', (req, res) => {
-    const { content, format, arrays } = req.body || {};
+    const { content, format, arrays, detectLists } = req.body || {};
     try {
-      res.json(describeData(content ?? '', { format, arrays }));
+      res.json(describeData(content ?? '', { format, arrays, detectLists: !!detectLists }));
     } catch (e) {
       res.status(400).json({ error: e.message });
     }

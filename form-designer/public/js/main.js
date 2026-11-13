@@ -10,7 +10,7 @@ import { renderProps, pickFile } from './props.js';
 import { renderTree, allValuePaths, arrayPaths } from './datatree.js';
 import { TOOLS, createElement } from './factory.js';
 import { ensureBackground, inspectPdf } from './pdfimport.js';
-import { readFileAsText, fileToBase64, download } from './util.js';
+import { readFileAsText, readDataFile, fileToBase64, download } from './util.js';
 import { escapeHtml, MM } from '/shared/elements.js';
 import { FORMAT_PRESETS } from '/shared/format.js';
 
@@ -93,6 +93,7 @@ on((w) => {
     openDialog({ ...d, buttons: [{ label: 'סגירה', primary: true }] });
   }
   if (typeof w === 'string' && w.startsWith('action:')) runAction(w.slice(7));
+  if (w === 'reparse') applySchema(state.template.schema, { silent: true });
   if (w === 'need-bg') {
     const bg = currentPage().background;
     if (bg?.type === 'pdf') ensureBackground(bg.pageIndex);
@@ -243,7 +244,7 @@ async function dataDialog() {
         }
         let r;
         try {
-          r = await api.post('/api/data/parse', { content });
+          r = await api.post('/api/data/parse', { content, detectLists: true });
         } catch (e) {
           $('#data-err', body).textContent = e.message;
           return false;
@@ -265,7 +266,7 @@ async function dataDialog() {
       detect();
       $('#data-file', body).onclick = async () => {
         const f = await pickFile('.xml,.json,application/json,text/xml');
-        if (f) { ta.value = await readFileAsText(f); detect(); }
+        if (f) { ta.value = await readDataFile(f); detect(); }
       };
       $('#data-sample-xml', body).onclick = () => { ta.value = SAMPLE_XML; detect(); };
       $('#data-sample-json', body).onclick = () => { ta.value = SAMPLE_JSON; detect(); };

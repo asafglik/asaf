@@ -372,3 +372,7 @@ details.adv[open] > summary::before { transform: rotate(-90deg); }
 .toast:not(.show) { pointer-events: none; }
 .toast-undo { border: 0; background: rgba(255,255,255,.18); color: #fff; border-radius: 6px; padding: 3px 10px; font-weight: 600; }
 .toast-undo:hover { background: rgba(255,255,255,.3); }
+
+.dt-list { margin-inline-start: 4px; border: 1px solid transparent; background: none; color: var(--muted); font-size: 11px; padding: 0 4px; border-radius: 4px; opacity: 0; }
+.dt-row:hover .dt-list, .dt-list:focus-visible { opacity: 1; }
+.dt-list:hover { border-color: var(--line); color: var(--accent); background: var(--panel); }

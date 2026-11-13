@@ -11,7 +11,7 @@
 // then the root data. Paths through arrays map over the items
 // (items.price -> list of prices).
 
-import { toNumber, isNumeric, parseDate, formatValue, formatDate, valueToString } from './format.js';
+import { toNumber, isNumeric, parseDate, parseDateAs, fromHorolog, secondsToTime, fixVisualHebrew, formatValue, formatDate, valueToString } from './format.js';
 
 export class ExprError extends Error {}
 
@@ -394,7 +394,10 @@ const FUNCS = {
   format: (x, spec) => formatValue(scalar(x), s(spec)),
   today: () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; },
   now: () => new Date(),
-  date: (x) => parseDate(scalar(x)),
+  date: (x, pattern) => (pattern === undefined ? parseDate(scalar(x)) : parseDateAs(scalar(x), s(pattern))),
+  hdate: (x) => fromHorolog(scalar(x)),
+  htime: (x) => secondsToTime(scalar(x)),
+  visual: (x) => fixVisualHebrew(s(x)),
   formatDate: (x, p) => formatDate(scalar(x), p === undefined ? 'dd/MM/yyyy' : s(p)),
   year: (x) => { const d = parseDate(scalar(x)); return d ? d.getFullYear() : 0; },
   month: (x) => { const d = parseDate(scalar(x)); return d ? d.getMonth() + 1 : 0; },
@@ -418,6 +421,9 @@ export const FUNCTION_HELP = [
   ['concat(...) או א & ב', 'שרשור טקסט'],
   ['format(x, "number:2")', 'עיצוב ערך (number / currency / percent / date:dd/MM/yyyy)'],
   ['today() / now()', 'התאריך / השעה הנוכחיים'],
+  ['date(x, "ddMMyyyy")', 'קריאת תאריך בתבנית ידועה (yyMMdd, ddMMyy...)'],
+  ['hdate(x) / htime(x)', 'תאריך ושעה בפורמט Caché ($H)'],
+  ['visual(x)', 'תיקון עברית שנשמרה הפוכה'],
   ['addDays(d, n) / diffDays(a, b)', 'חישובי תאריכים'],
   ['upper / lower / trim / len / left / right / replace / padLeft', 'פעולות טקסט'],
   ['coalesce(a, b, ...)', 'הערך הראשון שאינו ריק'],

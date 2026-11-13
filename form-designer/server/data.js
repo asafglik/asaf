@@ -1,5 +1,6 @@
 // Parsing the data world (XML or JSON) and describing its structure.
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { decodeBytes } from '../shared/encoding.js';
 
 export function detectFormat(content) {
   const s = String(content).replace(/^﻿/, '').trimStart();
@@ -14,8 +15,8 @@ export function detectFormat(content) {
  */
 export function parseData(content, { format, arrays = [] } = {}) {
   if (content === null || content === undefined) return {};
-  if (typeof content === 'object' && !Buffer.isBuffer(content)) return content;
-  const text = String(content).replace(/^﻿/, '');
+  if (typeof content === 'object' && !Buffer.isBuffer(content) && !(content instanceof Uint8Array)) return content;
+  const text = (typeof content === 'string' ? content : decodeBytes(content)).replace(/^﻿/, '');
   if (!text.trim()) return {};
   const fmt = format || detectFormat(text);
   if (fmt === 'json') {
@@ -119,9 +120,37 @@ function childrenOf(obj, base) {
   return Object.entries(obj).map(([k, v]) => buildTree(v, base ? `${base}.${k}` : k, k));
 }
 
+/**
+ * XML wrappers holding a single child element (<Complains><ComplainInCall>..</></>)
+ * are almost always lists that happen to have one item in the sample.
+ */
+export function findListWrappers(data, prefix = '', out = new Set()) {
+  if (Array.isArray(data)) {
+    for (const it of data.slice(0, 20)) findListWrappers(it, prefix, out);
+  } else if (data && typeof data === 'object') {
+    for (const [k, v] of Object.entries(data)) {
+      const p = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const keys = Object.keys(v).filter((x) => !x.startsWith('@') && x !== '#text');
+        if (keys.length === 1) {
+          const child = v[keys[0]];
+          if (child && typeof child === 'object' && !Array.isArray(child) && Object.keys(child).length > 1) out.add(`${p}.${keys[0]}`);
+        }
+      }
+      findListWrappers(v, p, out);
+    }
+  }
+  return out;
+}
+
 export function describeData(content, opts = {}) {
   const format = opts.format || (typeof content === 'string' ? detectFormat(content) : 'json');
-  const data = parseData(content, { format, arrays: opts.arrays });
+  let data = parseData(content, { format, arrays: opts.arrays });
+  // first load of an XML sample: also treat single-item wrappers as lists
+  if (opts.detectLists && format === 'xml') {
+    const extra = [...findListWrappers(data)];
+    if (extra.length) data = parseData(content, { format, arrays: [...(opts.arrays || []), ...extra] });
+  }
   const arrays = [...findArrays(data)];
   return { format, data, arrays, tree: buildTree(data) };
 }
