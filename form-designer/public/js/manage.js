@@ -60,14 +60,33 @@ const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: '2-di
 const custName = (id) => customers.find((c) => c.id === id)?.name || `#${id}`;
 
 // ---------------------------------------------------------------- data
+let me = { role: 'admin' };
 async function load() {
-  [templates, customers] = await Promise.all([api.get('/api/templates'), api.get('/api/customers')]);
+  me = await api.get('/api/me').catch(() => ({ role: 'admin' }));
+  applyRole();
+  [templates, customers] = await Promise.all([api.get('/api/templates'), me.role === 'admin' ? api.get('/api/customers') : []]);
   renderTemplates();
   renderCustomers();
   const sel = $('#tpl-customer');
   const cur = sel.value;
   sel.innerHTML = '<option value="">כל הלקוחות</option><option value="__none">ללא לקוח</option>' + customers.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
   sel.value = cur;
+}
+
+// a customer's designer sees only its own templates: no customers screen, no linking
+function applyRole() {
+  const cust = me.role !== 'admin';
+  document.body.classList.toggle('role-customer', cust);
+  const badge = $('#who');
+  if (badge) {
+    badge.hidden = !(cust || localStorageKey());
+    badge.innerHTML = `${cust ? `לקוח: <b>${escapeHtml(me.customer?.name || '')}</b>` : 'מנהל'} <button class="link" id="logout" type="button">החלפת מפתח</button>`;
+    $('#logout').onclick = () => { try { localStorage.removeItem('fd-api-key'); } catch { /* ignore */ } location.reload(); };
+  }
+  if (cust) showView('templates');
+}
+function localStorageKey() {
+  try { return !!localStorage.getItem('fd-api-key'); } catch { return false; }
 }
 
 // ---------------------------------------------------------------- templates
@@ -89,7 +108,7 @@ function renderTemplates() {
       <td class="t-name"><a href="/designer.html#${encodeURIComponent(t.id)}">${escapeHtml(t.name || 'ללא שם')}</a>
         ${t.hasSource ? '<span class="badge src" title="נבנתה על קובץ PDF מקור">PDF</span>' : ''} ${t.format ? `<span class="badge">${escapeHtml(String(t.format).toUpperCase())}</span>` : ''}
         <small>${escapeHtml(t.description || '')}</small></td>
-      <td><div class="tags">${t.customers.map((c) => `<span class="tag">${escapeHtml(custName(c))}</span>`).join('')}<button class="tag add" data-act="link" title="שיוך ללקוחות">+ שיוך</button></div></td>
+      <td class="t-cust"><div class="tags">${t.customers.map((c) => `<span class="tag">${escapeHtml(custName(c))}</span>`).join('')}${me.role === 'admin' ? '<button class="tag add" data-act="link" title="שיוך ללקוחות">+ שיוך</button>' : ''}</div></td>
       <td class="t-num">${t.pages}</td>
       <td class="t-num">${t.placeholders || '—'}</td>
       <td class="t-num">${fmtDate(t.updatedAt) || '—'}</td>
@@ -225,7 +244,8 @@ function renderCustomers() {
       <h3>${escapeHtml(c.name)} ${c.code ? `<span class="code">${escapeHtml(c.code)}</span>` : ''}</h3>
       <div class="meta">${[c.contact, c.email, c.phone].filter(Boolean).map(escapeHtml).join(' · ') || '&nbsp;'}</div>
       <div class="tags">${c.templates.map((id) => `<span class="tag" title="${escapeHtml(templates.find((t) => t.id === id)?.name || '')}">#${escapeHtml(id)}</span>`).join('') || '<span class="muted">אין תבניות משויכות</span>'}</div>
-      <div class="key">${c.hasApiKey ? `🔑 מפתח API מוגדר (מסתיים ב-<bdi>${escapeHtml(c.apiKeyHint || '')}</bdi>) – הלקוח יכול להפיק רק את התבניות שלו` : 'ללא מפתח API ייעודי'}</div>
+      <div class="key">${c.hasApiKey ? `🔑 מפתח הפקה מוגדר (מסתיים ב-<bdi>${escapeHtml(c.apiKeyHint || '')}</bdi>) – הפקה והורדה של התבניות של הלקוח בלבד` : 'ללא מפתח הפקה'}</div>
+      <div class="key">${c.hasDesignKey ? `✏️ מפתח עיצוב מוגדר (מסתיים ב-<bdi>${escapeHtml(c.designKeyHint || '')}</bdi>) – הלקוח יכול לעצב תבניות משלו במעצב` : 'ללא גישה למעצב'}</div>
       <div class="btn-row">
         <button class="btn" data-act="c-templates">תבניות</button>
         <button class="btn" data-act="c-edit">עריכה</button>
@@ -250,15 +270,18 @@ async function editCustomer(c = {}) {
       <label class="f"><span>איש קשר</span><input id="c-contact" class="input-lg" value="${escapeHtml(c.contact || '')}"></label>
       <label class="f"><span>אימייל</span><input id="c-email" class="input-lg" dir="ltr" value="${escapeHtml(c.email || '')}"></label>
       <label class="f"><span>טלפון</span><input id="c-phone" class="input-lg" dir="ltr" value="${escapeHtml(c.phone || '')}"></label>
-      <label class="f"><span>${c.hasApiKey ? 'מפתח API חדש' : 'מפתח API'}</span><input id="c-key" class="input-lg" dir="ltr" value="" placeholder="${c.hasApiKey ? `מוגדר מפתח שמסתיים ב-${escapeHtml(c.apiKeyHint || '')} – השאירו ריק כדי לא לשנות` : 'ללא'}"></label>
+      <label class="f"><span>${c.hasApiKey ? 'מפתח הפקה חדש' : 'מפתח הפקה (API)'}</span><input id="c-key" class="input-lg" dir="ltr" value="" placeholder="${c.hasApiKey ? `מוגדר מפתח שמסתיים ב-${escapeHtml(c.apiKeyHint || '')} – השאירו ריק כדי לא לשנות` : 'ללא'}"></label>
       <div class="btn-row"><button type="button" class="btn" id="c-gen">יצירת מפתח</button>${c.hasApiKey ? '<label class="f-check"><input type="checkbox" id="c-rmkey"> הסרת המפתח הקיים</label>' : ''}</div>
-      <p class="hint" id="c-keyhint">עם המפתח בכותרת <code dir="ltr">x-api-key</code> הלקוח יכול להפיק רק תבניות שמשויכות אליו. המפתח נשמר בשרת בצורה מוצפנת (hash) ולא יוצג שוב – העתיקו אותו עכשיו.</p>
+      <label class="f"><span>${c.hasDesignKey ? 'מפתח עיצוב חדש' : 'מפתח עיצוב'}</span><input id="c-dkey" class="input-lg" dir="ltr" value="" placeholder="${c.hasDesignKey ? `מוגדר מפתח שמסתיים ב-${escapeHtml(c.designKeyHint || '')} – השאירו ריק כדי לא לשנות` : 'ללא גישה למעצב'}"></label>
+      <div class="btn-row"><button type="button" class="btn" id="c-dgen">יצירת מפתח עיצוב</button>${c.hasDesignKey ? '<label class="f-check"><input type="checkbox" id="c-rmdkey"> הסרת מפתח העיצוב</label>' : ''}</div>
+      <p class="hint" id="c-keyhint"><b>מפתח הפקה:</b> לשרתי ההפקה ולהורדת התבניות ממאגר התבניות. <b>מפתח עיצוב:</b> כניסה של הלקוח למעצב, ליצירה ועריכה של התבניות שלו בלבד. עם המפתח בכותרת <code dir="ltr">x-api-key</code> הלקוח יכול להפיק רק תבניות שמשויכות אליו. המפתח נשמר בשרת בצורה מוצפנת (hash) ולא יוצג שוב – העתיקו אותו עכשיו.</p>
       <label class="f f-col"><span>הערות</span><textarea id="c-notes" rows="2">${escapeHtml(c.notes || '')}</textarea></label>`,
     buttons: [{ label: 'ביטול' }, { label: 'שמירה', primary: true, action: (b) => {
       const body = {
         name: $('#c-name', b).value, code: $('#c-code', b).value, contact: $('#c-contact', b).value,
         email: $('#c-email', b).value, phone: $('#c-phone', b).value, apiKey: $('#c-key', b).value.trim(), notes: $('#c-notes', b).value,
         removeApiKey: !!$('#c-rmkey', b)?.checked,
+        designKey: $('#c-dkey', b).value.trim(), removeDesignKey: !!$('#c-rmdkey', b)?.checked,
       };
       return c.id ? api.put(`/api/customers/${c.id}`, body) : api.post('/api/customers', body);
     } }],
@@ -268,6 +291,12 @@ async function editCustomer(c = {}) {
         k.value = randomKey();
         k.select();
         navigator.clipboard?.writeText(k.value).then(() => toast('המפתח הועתק ללוח'), () => {});
+      };
+      $('#c-dgen', b).onclick = () => {
+        const k = $('#c-dkey', b);
+        k.value = randomKey().replace('fdk_', 'fdd_');
+        k.select();
+        navigator.clipboard?.writeText(k.value).then(() => toast('מפתח העיצוב הועתק ללוח'), () => {});
       };
       $('#c-name', b).focus();
     },
@@ -354,7 +383,7 @@ document.addEventListener('click', async (ev) => {
 });
 
 document.querySelector('.mtabs').addEventListener('click', (ev) => {
-  const b = ev.target.closest('.mtab');
+  const b = ev.target.closest('.mtab[data-view]');
   if (!b) return;
   showView(b.dataset.view);
   history.replaceState(null, '', b.dataset.view === 'customers' ? '#customers' : '#');
@@ -368,5 +397,5 @@ if (location.hash === '#customers') showView('customers');
 $('#tour-btn').addEventListener('click', () => { showView('templates'); startTour(MANAGE_TOUR); });
 load().then(() => { if (firstVisit('fd-tour-manage')) setTimeout(() => startTour(MANAGE_TOUR), 500); }).catch((e) => toast(e.message, 'error'));
 api.get('/api/health').then((h) => {
-  $('#server-info').textContent = h.chrome ? '' : '⚠ לא נמצא דפדפן להפקת PDF בשרת';
+  $('#server-info').textContent = h.ok === false ? '⚠ לא נמצא דפדפן להפקת PDF בשרת' : '';
 }).catch(() => {});

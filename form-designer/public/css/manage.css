@@ -53,3 +53,19 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .more-pop hr { border: 0; border-top: 1px solid var(--line-2); margin: 4px 0; }
 .mtable-wrap { overflow-x: auto; overflow-y: visible; }
 .dlg-body .f-col > span:first-child { margin-bottom: 0; }
+
+/* a customer's designer: no customers screen, no linking */
+.role-customer .mtab[data-view="customers"],
+.role-customer #tpl-customer,
+.role-customer .t-cust,
+.role-customer #tpl-table th:nth-child(3) { display: none; }
+.who { font-size: 13px; color: var(--muted, #6b7280); white-space: nowrap; }
+.who .link { margin-inline-start: 6px; }
+
+/* template repository page */
+a.mtab { text-decoration: none; display: inline-block; }
+.repo-help { margin-top: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; }
+.repo-help h2 { margin: 0 0 6px; font-size: 16px; }
+.repo-help p { margin: 10px 0 6px; color: #4a5567; }
+.repo-help pre { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 10px 14px; overflow: auto; font-size: 12.5px; margin: 0; text-align: left; }
+#repo-customer { width: 220px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }

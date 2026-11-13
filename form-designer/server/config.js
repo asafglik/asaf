@@ -55,6 +55,10 @@ export const config = {
   // bulk rendering: records per call and request size
   maxBatch: +(env.FD_MAX_BATCH || fileCfg.maxBatch || 10000),
   batchBodyLimit: env.FD_BATCH_BODY_LIMIT || fileCfg.batchBodyLimit || '300mb',
+  // runtime servers: pull templates from the central repository with the customer's key(s)
+  repoUrl: env.FD_REPO_URL || fileCfg.repoUrl || '',
+  repoKeys: String(env.FD_REPO_KEY || fileCfg.repoKey || '').split(',').map((k) => k.trim()).filter(Boolean),
+  repoSyncMinutes: +(env.FD_REPO_SYNC_MINUTES || fileCfg.repoSyncMinutes || 5),
   allowRemoteImages: bool(env.FD_ALLOW_REMOTE_IMAGES, !!fileCfg.allowRemoteImages),
   sofficePath: env.SOFFICE_PATH || fileCfg.sofficePath || '',
   historyLimit: +(fileCfg.historyLimit || 20),

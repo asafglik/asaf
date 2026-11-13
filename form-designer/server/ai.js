@@ -7,6 +7,7 @@
 // Both return { message, operations } that the designer applies (and can undo).
 // Uses Claude when an Anthropic API key is configured; otherwise autoDesign
 // falls back to a rule-based detector (PDF form fields and "label:" text).
+import { pageSize } from './render/html.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
 
@@ -179,6 +180,7 @@ function wrapApiError(e) {
  * mode: "overlay" (keep the PDF as background, add data fields) | "rebuild" (recreate the layout with native elements)
  */
 export async function autoDesign({ template, tree, pages = [], mode = 'overlay', instructions = '' }) {
+  if (mode === 'data') return designFromData({ template, tree, instructions });
   if (!aiAvailable()) return heuristicDesign({ tree, pages });
   const content = [];
   pages.slice(0, 8).forEach((p, i) => {
@@ -206,6 +208,101 @@ ${instructions ? `User instructions: ${instructions}` : ''}`,
   } catch (e) {
     throw wrapApiError(e);
   }
+}
+
+// ---------------------------------------------------------------- a new form from the data world alone
+export async function designFromData({ template = {}, tree, instructions = '' }) {
+  if (!tree?.children?.length) throw Object.assign(new Error('כדי לבנות טופס מהנתונים צריך קודם לטעון עולם נתונים'), { status: 400 });
+  if (!aiAvailable()) return heuristicFromData({ template, tree });
+  const { width, height } = pageSize(template);
+  const content = [{
+    type: 'text',
+    text: `DATA WORLD (bind only to these paths):\n${flattenTree(tree).join('\n')}
+
+CURRENT TEMPLATE:
+${JSON.stringify(compactTemplate(template))}
+
+TASK: Design a new, professional Hebrew (RTL) form for this data world from scratch, on page 1 (${round(width)} x ${round(height)} mm, margins 12 mm).
+- A clear title (document type inferred from the data, e.g. "חשבונית מס", "קריאת שירות") and, if the data has company / sender details, a header block with them.
+- Group related values into labelled sections (fixed Hebrew label text + a field bound to the value), two columns where it fits, aligned on a consistent grid.
+- Labels are Hebrew translations of the field names; dates and amounts get suitable formats.
+- Every list becomes a paginating table with Hebrew headers; add totals in column footers for amounts/quantities.
+- Add a footer with "עמוד {{page}} מתוך {{pages}}", and a signature area where the document type needs one.
+- Prefer a calm, modern design: one accent colour, thin lines, consistent font sizes (title 18-20pt, labels 9pt bold, values 10pt).
+Do not delete existing elements unless the page is empty of meaningful content.
+${instructions ? `User instructions: ${instructions}` : ''}`,
+  }];
+  try {
+    return await callClaude(content, { effort: 'high' });
+  } catch (e) {
+    throw wrapApiError(e);
+  }
+}
+
+/** Without the AI agent: a clean basic layout - sections of labelled fields, tables for lists, signature. */
+export function heuristicFromData({ template = {}, tree }) {
+  const { width, height } = pageSize(template);
+  const M = 12;
+  const W = width - 2 * M;
+  const ops = [];
+  const nice = (k) => String(k).replace(/^@/, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+  let y = M;
+  ops.push(add(1, { type: 'text', x: M, y, w: W, h: 11, text: template.name && template.name !== 'תבנית חדשה' ? template.name : 'טופס', style: { fontSize: 18, bold: true, align: 'right', color: '#1e3a8a' } }));
+  y += 12;
+  ops.push(add(1, { type: 'line', x: M, y, w: W, h: 1, orientation: 'horizontal', thickness: 1, color: '#1e3a8a' }));
+  y += 5;
+  const groups = []; // { title, values: [node], lists: [node] }
+  const collect = (node, title) => {
+    const g = { title, values: [], lists: [] };
+    for (const c of node.children || []) {
+      if (c.kind === 'value') g.values.push(c);
+      else if (c.kind === 'array') g.lists.push(c);
+    }
+    if (g.values.length || g.lists.length) groups.push(g);
+    for (const c of node.children || []) if (c.kind === 'object') collect(c, nice(c.name));
+  };
+  collect(tree, '');
+  const colW = (W - 6) / 2;
+  const rowH = 7;
+  let truncated = 0;
+  for (const g of groups) {
+    if (g.values.length) {
+      if (y > height - 40) { truncated += g.values.length; continue; }
+      if (g.title) {
+        ops.push(add(1, { type: 'text', x: M, y, w: W, h: 7, text: g.title, style: { fontSize: 10, bold: true, align: 'right', background: '#eef2ff', color: '#1e3a8a', padding: 1.5, valign: 'middle' } }));
+        y += 9;
+      }
+      g.values.forEach((v, i) => {
+        const col = i % 2; // RTL: first column on the right
+        const x0 = col === 0 ? M + colW + 6 : M;
+        const top = y + Math.floor(i / 2) * rowH;
+        if (top > height - 30) { truncated++; return; }
+        ops.push(add(1, { type: 'text', x: x0 + colW - 32, y: top, w: 32, h: 6, text: nice(v.name), style: { fontSize: 9, bold: true, align: 'right', valign: 'middle', color: '#374151' } }));
+        ops.push(add(1, { type: 'field', x: x0, y: top, w: colW - 34, h: 6, binding: v.path, style: { fontSize: 10, align: 'right', valign: 'middle', borderSides: 'bottom', borderWidth: 0.5, borderColor: '#cbd5e1' } }));
+      });
+      y += Math.ceil(g.values.length / 2) * rowH + 4;
+    }
+    for (const l of g.lists) {
+      const cols = (l.children || []).filter((c) => c.kind === 'value').slice(0, 7);
+      if (!cols.length || y > height - 50) continue;
+      const h = Math.min(90, height - 40 - y);
+      ops.push(add(1, {
+        type: 'table', x: M, y, w: W, h, binding: l.path, overflow: 'paginate',
+        columns: cols.map((c) => ({ header: nice(c.name), binding: c.path, width: 1, align: 'right' })),
+        headerStyle: { background: '#1e3a8a', color: '#ffffff' }, altRowBackground: '#f8fafc', borderWidth: 0.5, borderColor: '#cbd5e1',
+      }));
+      y += h + 6;
+    }
+  }
+  const sigY = Math.min(Math.max(y + 4, height - 45), height - 32);
+  ops.push(add(1, { type: 'signature', x: M, y: sigY, w: 70, h: 18, placeholder: 'signature_1', label: 'חתימה', title: 'חתימה', required: true }));
+  return {
+    heuristic: true,
+    message: `נבנה טופס בסיסי מעולם הנתונים (ללא סוכן AI): ${groups.reduce((n, g) => n + g.values.length, 0) - truncated} שדות בקבוצות, ${groups.reduce((n, g) => n + g.lists.length, 0)} טבלאות ואזור חתימה.`
+      + (truncated ? ` ${truncated} שדות לא נכנסו בעמוד – הוסיפו אותם מלשונית "נתונים".` : '')
+      + ' התוויות הן שמות השדות – כדאי לתרגם אותן. עם הסוכן החכם (ANTHROPIC_API_KEY) מתקבל עיצוב מלא עם תוויות בעברית.',
+    operations: ops,
+  };
 }
 
 // ---------------------------------------------------------------- free-text request

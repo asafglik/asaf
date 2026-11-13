@@ -153,6 +153,33 @@ export function fontsCssForTemplate(template) {
   return faces.map((f) => faceCss(f, dataUrl(f))).join('\n');
 }
 
+/** Uploaded fonts used by these templates, as files to install elsewhere. */
+export function uploadedFontsFor(templates) {
+  const json = JSON.stringify(templates);
+  return readUploaded()
+    .filter((f) => FAMILY_RE.test(f.family || '') && f.file && path.basename(f.file) === f.file && json.includes(f.family))
+    .map((f) => {
+      try {
+        return { family: f.family, weight: f.weight || 400, style: f.style || 'normal', fileName: f.file, dataBase64: fs.readFileSync(path.join(uploadedDir(), f.file)).toString('base64') };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+/** Install a font file unless the same one is already there. */
+export function installFont(font) {
+  const cur = readUploaded().find((f) => f.family === font.family && (f.weight || 400) === +(font.weight || 400) && (f.style || 'normal') === (font.style || 'normal'));
+  if (cur) {
+    try {
+      if (fs.readFileSync(path.join(uploadedDir(), cur.file)).toString('base64') === font.dataBase64) return false;
+    } catch { /* reinstall */ }
+  }
+  saveUploadedFont(font);
+  return true;
+}
+
 export function saveUploadedFont({ family, weight = 400, style = 'normal', fileName, dataBase64 }) {
   const bad = (m) => Object.assign(new Error(m), { status: 400 });
   family = String(family || '').trim();

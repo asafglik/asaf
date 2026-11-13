@@ -82,7 +82,7 @@ export function templateExists(id) {
   return validId(id) && fs.existsSync(fileOf(id));
 }
 
-export function saveTemplate(id, template) {
+export function saveTemplate(id, template, { keepDates = false } = {}) {
   const f = fileOf(id);
   if (fs.existsSync(f) && config.historyLimit > 0) {
     const hdir = path.join(dir(), '.history', String(id));
@@ -93,7 +93,8 @@ export function saveTemplate(id, template) {
     const old = fs.readdirSync(hdir).sort();
     for (const o of old.slice(0, Math.max(0, old.length - config.historyLimit))) fs.rmSync(path.join(hdir, o));
   }
-  const t = { ...template, id: String(id), updatedAt: new Date().toISOString() };
+  // keepDates: a template installed from the repository keeps its version date
+  const t = { ...template, id: String(id), updatedAt: keepDates && template.updatedAt ? template.updatedAt : new Date().toISOString() };
   if (!t.createdAt) t.createdAt = t.updatedAt;
   const tmp = f + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(t));
@@ -171,8 +172,8 @@ export function listCustomers() {
 
 /** Customer as shown by the API: never the key hash. */
 export function publicCustomer(c) {
-  const { apiKeyHash, ...rest } = c;
-  return { ...rest, hasApiKey: !!apiKeyHash };
+  const { apiKeyHash, designKeyHash, ...rest } = c;
+  return { ...rest, hasApiKey: !!apiKeyHash, hasDesignKey: !!designKeyHash };
 }
 
 export function hasCustomerKeys() {
@@ -208,17 +209,23 @@ export function saveCustomer(data) {
     c.name = name;
     list.push(c);
   }
-  // the key itself is never stored: only its hash and last 4 characters
-  if (data.removeApiKey) { delete c.apiKeyHash; delete c.apiKeyHint; }
-  if (data.apiKey) {
-    const key = String(data.apiKey).trim();
-    if (key.length < 16) throw Object.assign(new Error('מפתח API חייב להכיל לפחות 16 תווים'), { status: 400 });
+  // keys are never stored: only their hash and last 4 characters.
+  // apiKey = render / download (runtime servers), designKey = the customer's designer
+  const setKey = (field, value) => {
+    const key = String(value).trim();
+    if (key.length < 16) throw Object.assign(new Error('מפתח חייב להכיל לפחות 16 תווים'), { status: 400 });
     if (config.apiKey && key === config.apiKey) throw Object.assign(new Error('אי אפשר להשתמש במפתח המנהל כמפתח לקוח'), { status: 400 });
     const h = hashKey(key);
-    if (list.some((x) => x !== c && x.apiKeyHash === h)) throw Object.assign(new Error('מפתח ה-API כבר בשימוש אצל לקוח אחר'), { status: 409 });
-    c.apiKeyHash = h;
-    c.apiKeyHint = key.slice(-4);
-  }
+    const other = field === 'apiKey' ? 'designKeyHash' : 'apiKeyHash';
+    if (c[other] === h) throw Object.assign(new Error('מפתח ההפקה ומפתח העיצוב חייבים להיות שונים'), { status: 400 });
+    if (list.some((x) => x !== c && (x.apiKeyHash === h || x.designKeyHash === h))) throw Object.assign(new Error('המפתח כבר בשימוש אצל לקוח אחר'), { status: 409 });
+    c[field + 'Hash'] = h;
+    c[field + 'Hint'] = key.slice(-4);
+  };
+  if (data.removeApiKey) { delete c.apiKeyHash; delete c.apiKeyHint; }
+  if (data.removeDesignKey) { delete c.designKeyHash; delete c.designKeyHint; }
+  if (data.apiKey) setKey('apiKey', data.apiKey);
+  if (data.designKey) setKey('designKey', data.designKey);
   writeCustomers(list);
   return c;
 }
@@ -234,6 +241,18 @@ export function deleteCustomer(id) {
       saveTemplate(t.id, { ...full, customers: full.customers.filter((c) => c !== String(id)) });
     }
   }
+}
+
+/** The customer and role of a key: { customer, role: 'render' | 'designer' } or null. */
+export function customerByKey(key) {
+  if (!key) return null;
+  const h = Buffer.from(hashKey(key), 'hex');
+  const eq = (v) => v && crypto.timingSafeEqual(Buffer.from(v, 'hex'), h);
+  for (const c of listCustomers()) {
+    if (eq(c.apiKeyHash)) return { customer: c, role: 'render' };
+    if (eq(c.designKeyHash)) return { customer: c, role: 'designer' };
+  }
+  return null;
 }
 
 export function customerByApiKey(key) {

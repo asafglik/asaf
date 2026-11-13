@@ -24,6 +24,8 @@ const SUGGESTIONS = [
   'יישר את כל השדות לגופן David בגודל 11',
 ];
 
+const IMPROVE = 'שפר את עיצוב הטופס הנוכחי: יישור לרשת אחידה, ריווח עקבי בין שדות ושורות, היררכיה ברורה של כותרות, גופנים וגדלים אחידים, קריאות טובה, וקיבוץ של שדות קשורים. אל תמחק שדות ואל תשנה את הקישורים לנתונים. בסוף פרט בקצרה מה שינית ומה עוד מומלץ.';
+
 function render() {
   const hasPdf = !!state.sourcePdf;
   pane.innerHTML = `
@@ -40,8 +42,14 @@ function render() {
       ${!state.tree ? '<p class="hint warn">כדי לזהות שדות צריך קודם לטעון את עולם הנתונים (אותה רשומה שממנה הופק ה-PDF).</p>' : ''}
     </section>
     <section class="ag-card">
+      <h3>טופס חדש מעולם הנתונים</h3>
+      <p class="hint">אין טופס דוגמה? הסוכן בונה טופס שלם מעולם הנתונים בלבד: כותרת, קבוצות של שדות עם תוויות בעברית, טבלאות לרשימות עם סיכומים, כותרת תחתונה ואזור חתימה.</p>
+      <div class="btn-row"><button class="btn${state.tree ? ' btn-primary' : ''}" data-ag="from-data" type="button"${state.tree && !busy ? '' : ' disabled'}>✨ בניית טופס מהנתונים</button></div>
+      ${!state.tree ? '<p class="hint warn">טענו קודם עולם נתונים (XML / JSON) בכפתור "עולם נתונים".</p>' : ''}
+    </section>
+    <section class="ag-card">
       <h3>עיצוב אוטומטי מקובץ דוגמה</h3>
-      <p class="hint">הסוכן קורא את ה-PDF (תמונה, טקסטים ושדות טופס קיימים) ואת עולם הנתונים, וממקם לבד שדות, טבלאות, תיבות סימון ואזורי חתימה.</p>
+      <p class="hint">מעלים טופס דוגמה ב-PDF או ב-Word. הסוכן קורא אותו (תמונה, טקסטים ושדות טופס קיימים) ואת עולם הנתונים, וממקם לבד שדות, טבלאות, תיבות סימון ואזורי חתימה.</p>
       <div class="seg ag-mode">
         <button class="${state.agentMode !== 'rebuild' ? 'on' : ''}" data-mode="overlay" type="button" title="ה-PDF נשאר רקע, ומעליו נוספים שדות">שדות מעל ה-PDF</button>
         <button class="${state.agentMode === 'rebuild' ? 'on' : ''}" data-mode="rebuild" type="button" title="המסמך נבנה מחדש מרכיבים, בלי רקע">בנייה מחדש</button>
@@ -49,12 +57,13 @@ function render() {
       <textarea id="ag-instr" rows="2" placeholder="הנחיות נוספות (רשות): למשל &quot;תאריכים בפורמט dd/MM/yyyy&quot;">${escapeHtml(state.agentInstr || '')}</textarea>
       <div class="btn-row">
         ${hasPdf ? '<button class="btn btn-primary" data-ag="auto" type="button">✨ עיצוב אוטומטי</button>' : ''}
-        <button class="btn${hasPdf ? '' : ' btn-primary'}" data-ag="upload" type="button">${hasPdf ? 'PDF אחר...' : '✨ העלאת PDF דוגמה...'}</button>
+        <button class="btn${hasPdf ? '' : ' btn-primary'}" data-ag="upload" type="button">${hasPdf ? 'קובץ אחר...' : '✨ העלאת PDF או Word דוגמה...'}</button>
       </div>
       ${!state.tree ? '<p class="hint warn">כדאי להגדיר קודם עולם נתונים, כדי שהשדות יקושרו לנתונים.</p>' : ''}
     </section>
     <section class="ag-card ag-chat-card">
       <h3>בקשות עיצוב</h3>
+      <div class="btn-row"><button class="btn" data-ag="improve" type="button"${status.available && !busy ? '' : ' disabled'} title="הסוכן משפר יישור, ריווח, היררכיה וקריאות בלי לשנות את השדות">✨ שיפור הטופס הנוכחי</button></div>
       <div class="ag-chat" id="ag-chat">
         ${chat.length ? chat.map(msgHtml).join('') : `<div class="ag-sugg">${SUGGESTIONS.map((s) => `<button class="chip" data-sugg="${escapeHtml(s)}" type="button"${status.available ? '' : ' disabled aria-disabled="true"'}>${escapeHtml(s)}</button>`).join('')}</div>`}
         ${busy ? '<div class="ag-msg agent busy"><span class="spinner"></span> הסוכן עובד...</div>' : ''}
@@ -256,10 +265,41 @@ async function autoDesign() {
   }
 }
 
+async function designFromData() {
+  if (busy || !state.tree) return;
+  const instructions = document.getElementById('ag-instr')?.value || '';
+  busy = true;
+  chat.push({ role: 'user', text: 'בנה טופס חדש מעולם הנתונים' });
+  render();
+  try {
+    const r = await api.post('/api/ai/auto-design', { template: fullTemplateLite(), tree: state.tree, pages: [], mode: 'data', instructions });
+    const applied = r.operations.length ? applyOperations(r.operations) : 0;
+    chat.push({ role: 'agent', text: r.message || 'בוצע.', applied, undoable: applied > 0, depth: undoDepth() });
+  } catch (e) {
+    chat.push({ role: 'error', text: e.message });
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
 async function uploadAndDesign() {
-  const f = await pickFile('application/pdf,.pdf');
+  const f = await pickFile('application/pdf,.pdf,.docx,.doc,.odt,.rtf');
   if (!f) return;
-  const b64 = await fileToBase64(f);
+  let b64 = await fileToBase64(f);
+  if (!/\.pdf$/i.test(f.name)) {
+    // Word sample: the server turns it into a PDF (LibreOffice, or the document content)
+    busy = true;
+    chat.push({ role: 'user', text: `ממיר את ${f.name} לדוגמה...` });
+    render();
+    try {
+      const r = await api.post('/api/import/docx', { dataBase64: b64, mode: 'sample', fileName: f.name });
+      b64 = r.pdfBase64;
+      if (r.via === 'html') chat.push({ role: 'agent', text: 'הקובץ הומר לפי התוכן שלו (בלי LibreOffice בשרת הפריסה עשויה להיות שונה מעט מהמקור).' });
+    } finally {
+      busy = false;
+    }
+  }
   const info = await inspectPdf(b64);
   state.sourcePdf = b64;
   state.bgImages = {};
@@ -319,6 +359,8 @@ pane.addEventListener('click', (ev) => {
   else if (b.dataset.ag === 'auto') autoDesign();
   else if (b.dataset.ag === 'upload') uploadAndDesign().catch((e) => { chat.push({ role: 'error', text: e.message }); render(); });
   else if (b.dataset.ag === 'send') sendRequest(document.getElementById('ag-req').value);
+  else if (b.dataset.ag === 'improve') sendRequest(IMPROVE);
+  else if (b.dataset.ag === 'from-data') designFromData();
   else if (b.dataset.ag === 'review') startReview().catch((e) => { busy = false; chat.push({ role: 'error', text: e.message }); render(); });
   else if (b.dataset.ag === 'review-again' && lastReview()) openReview(lastReview());
   else if (b.dataset.sugg) { const ta = document.getElementById('ag-req'); ta.value = b.dataset.sugg; ta.focus(); }

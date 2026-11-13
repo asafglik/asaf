@@ -19,6 +19,8 @@ import { reviewPdf } from './review.js';
 import { renderBatch, mergePdfs, manifestOf, ZipWriter } from './batch.js';
 import { parseData } from './data.js';
 import { sanitizeTemplate } from './sanitize.js';
+import { bundleFor, repoListing, repoTemplate, installBundle, syncFromRepo, startRepoSync, lastSyncStatus, readRepoState } from './repo.js';
+import { uploadedFontsFor } from './fonts.js';
 import { decodeBytes, charsetOf } from '../shared/encoding.js';
 
 const app = express();
@@ -37,28 +39,48 @@ function isAdminKey(k) {
   return !!(config.apiKey && k && crypto.timingSafeEqual(sha(k), sha(config.apiKey)));
 }
 
+// roles: admin (FD_API_KEY, or an open server without keys), designer (a
+// customer's design key: designer limited to that customer's templates),
+// render (a customer's API key: render / download that customer's templates)
 function apiKey(req, res, next) {
   const k = requestKey(req);
-  if (isAdminKey(k)) return next();
-  const customer = k ? store.customerByApiKey(k) : null;
-  if (customer) {
-    req.customer = customer;
+  if (isAdminKey(k)) { req.role = 'admin'; return next(); }
+  const found = k ? store.customerByKey(k) : null;
+  if (found) {
+    req.customer = found.customer;
+    req.role = found.role;
     return next();
   }
   // no admin key configured: open access, except on a render server that has
   // customer keys installed - there a customer key is always required
-  if (!config.apiKey && !(config.mode === 'render' && store.hasCustomerKeys())) return next();
+  if (!config.apiKey && !(config.mode === 'render' && store.hasCustomerKeys())) { req.role = 'admin'; return next(); }
   res.status(401).json({ error: 'נדרש מפתח API תקין (כותרת x-api-key)' });
 }
 
 function adminOnly(req, res, next) {
-  if (req.customer) return res.status(403).json({ error: 'מפתח לקוח מאפשר הפקה בלבד' });
+  if (req.role !== 'admin') return res.status(403).json({ error: req.role === 'designer' ? 'הפעולה זמינה למנהל המערכת בלבד' : 'מפתח לקוח מאפשר הפקה בלבד' });
   next();
+}
+
+// designer API: the admin, or a customer's designer (limited to its own templates)
+function designerAccess(req, res, next) {
+  if (req.role === 'admin' || req.role === 'designer') return next();
+  res.status(403).json({ error: 'מפתח לקוח מאפשר הפקה בלבד' });
 }
 
 function checkCustomerAccess(req, template) {
   if (req.customer && !(template.customers || []).includes(req.customer.id)) {
     throw Object.assign(new Error(`תבנית ${template.id} אינה משויכת ללקוח`), { status: 403 });
+  }
+}
+
+// a customer's designer edits only templates that belong to that customer alone;
+// a template shared with other customers is read-only for it (it can duplicate it)
+function checkCanEdit(req, template) {
+  if (req.role !== 'designer') return;
+  checkCustomerAccess(req, template);
+  if ((template.customers || []).length > 1) {
+    throw Object.assign(new Error(`תבנית ${template.id} משותפת לכמה לקוחות ואפשר לערוך אותה רק דרך מנהל המערכת. שכפלו אותה כדי ליצור גרסה משלכם`), { status: 403 });
   }
 }
 
@@ -98,9 +120,9 @@ function pdfFileName(req, template) {
   return n.toLowerCase().endsWith('.pdf') ? n : n + '.pdf';
 }
 
-async function sendRender(req, res, templateId, data, format, charset) {
-  const template = store.getTemplate(String(templateId));
-  checkCustomerAccess(req, template);
+async function sendRender(req, res, templateId, data, format, charset, inlineTemplate) {
+  const template = inlineTemplate || store.getTemplate(String(templateId));
+  if (!inlineTemplate) checkCustomerAccess(req, template);
   const started = Date.now();
   const lang = req.query.lang || req.body?.lang || undefined;
   const { pdf, errors, pages, placeholders } = await renderPdf(template, data, { format, lang, charset });
@@ -130,16 +152,24 @@ app.post('/api/render/:templateId', apiKey, admit, rawBody, asyncH(async (req, r
   await sendRender(req, res, req.params.templateId, body, format, charsetOf(ct));
 }));
 
-// POST /api/render   { templateId, data | xml | json, format?, output?: "base64" }
+// POST /api/render   { templateId | template: {...}, data | xml | json, format?, output?: "base64" }
+// "template" can be the template itself (JSON from the repository): on a runtime
+// server with any valid key, on the central server with the admin key only.
 app.post('/api/render', apiKey, admit, jsonBody, asyncH(async (req, res) => {
   const b = req.body || {};
-  const templateId = b.templateId ?? b.template ?? req.query.templateId;
+  let inline = null;
+  if (b.template && typeof b.template === 'object') {
+    if (!(req.role === 'admin' || (config.mode === 'render' && req.customer))) return res.status(403).json({ error: 'הפקה עם תבנית בגוף הבקשה זמינה בשרת הפקה, או למנהל המערכת' });
+    if (!Array.isArray(b.template.pages)) return res.status(400).json({ error: 'template אינה תבנית תקינה' });
+    inline = { ...sanitizeTemplate(b.template), id: String(b.template.id || 'inline') };
+  }
+  const templateId = inline ? inline.id : b.templateId ?? b.template ?? req.query.templateId;
   if (templateId === undefined) return res.status(400).json({ error: 'חסר templateId' });
   let data = b.data ?? b.xml ?? b.json ?? {};
   let format = b.format;
   if (b.dataBase64) data = Buffer.from(b.dataBase64, 'base64').toString('utf8');
   if (typeof data === 'string' && !format) format = detectFormat(data);
-  await sendRender(req, res, templateId, data, format);
+  await sendRender(req, res, templateId, data, format, undefined, inline);
 }));
 
 // POST /api/render-batch/:templateId   bulk rendering (thousands of records)
@@ -216,7 +246,11 @@ app.get('/api/health', (req, res) => {
   const chrome = !!findChrome();
   // details only for the admin (or an open server without keys)
   if (!isAdminKey(requestKey(req)) && config.apiKey) return res.json({ ok: chrome, mode: config.mode });
-  res.json({ ok: chrome, mode: config.mode, chrome: findChrome() || null, libreoffice: full ? findSoffice() : undefined, templates: store.listTemplates().length, ai: aiAvailable() });
+  res.json({ ok: chrome, mode: config.mode, repo: config.repoUrl ? { url: config.repoUrl, lastSync: lastSyncStatus() } : undefined, chrome: findChrome() || null, libreoffice: full ? findSoffice() : undefined, templates: store.listTemplates().length, ai: aiAvailable() });
+});
+
+app.get('/api/me', apiKey, (req, res) => {
+  res.json({ role: req.role, mode: config.mode, customer: req.customer ? { id: req.customer.id, name: req.customer.name, code: req.customer.code || '' } : null });
 });
 
 app.get('/api/templates', apiKey, (req, res) => {
@@ -234,9 +268,48 @@ app.get('/api/templates/:id/placeholders', apiKey, (req, res) => {
 app.get('/api/templates/:id', apiKey, (req, res) => {
   let t = store.getTemplate(req.params.id);
   checkCustomerAccess(req, t);
-  if (req.customer) t = { ...t, customers: undefined, schema: t.schema ? { ...t.schema, sample: undefined } : null };
+  if (req.role === 'render') t = { ...t, customers: undefined, schema: t.schema ? { ...t.schema, sample: undefined } : null };
   if (req.query.download) res.set('Content-Disposition', `attachment; filename="template-${t.id}.json"`);
   res.json(t);
+});
+
+// ------------------------------------------------------------- template repository
+// Central server: each customer lists and downloads the templates built for it
+// (with its API key or design key; the admin passes ?customer=<id>).
+function repoCustomer(req) {
+  if (req.customer) return req.customer;
+  if (!req.query.customer) throw Object.assign(new Error('חסר ?customer=<מספר לקוח>'), { status: 400 });
+  return store.getCustomer(String(req.query.customer));
+}
+if (full) {
+  app.get('/api/repo/templates', apiKey, (req, res) => res.json(repoListing(repoCustomer(req).id)));
+  app.get('/api/repo/templates/:id', apiKey, (req, res) => {
+    const c = repoCustomer(req);
+    const t = store.getTemplate(req.params.id);
+    if (!(t.customers || []).includes(c.id)) throw Object.assign(new Error(`תבנית ${t.id} אינה משויכת ללקוח`), { status: 403 });
+    const out = repoTemplate(t, c.id);
+    // runtime sync: the template together with the uploaded fonts it uses
+    if (req.query.fonts === '1') return res.json({ template: out, fonts: uploadedFontsFor([out]) });
+    if (req.query.download) res.set('Content-Disposition', `attachment; filename="template-${t.id}.json"`);
+    res.json(out);
+  });
+  app.get('/api/repo/bundle', apiKey, (req, res) => {
+    const c = repoCustomer(req);
+    res.set('Content-Disposition', `attachment; filename="bundle-customer-${c.id}.json"`);
+    res.json(bundleFor(c));
+  });
+}
+
+// Runtime servers: pull now from the repository, or install an uploaded bundle (admin key)
+app.post('/api/repo/sync', apiKey, adminOnly, asyncH(async (req, res) => {
+  const r = await syncFromRepo();
+  res.status(r.ok ? 200 : 502).json(r);
+}));
+app.post('/api/repo/install', apiKey, adminOnly, express.json({ limit: config.batchBodyLimit }), (req, res) => {
+  res.json(installBundle(req.body, { prune: req.query.prune === '1' }));
+});
+app.get('/api/repo/status', apiKey, adminOnly, (req, res) => {
+  res.json({ repoUrl: config.repoUrl || null, syncMinutes: config.repoUrl ? config.repoSyncMinutes : null, lastSync: lastSyncStatus(), installed: readRepoState().customers });
 });
 
 // ------------------------------------------------------------- designer API
@@ -269,30 +342,40 @@ if (full) {
     }
   });
 
-  app.use('/api', apiKey, adminOnly, jsonBody);
+  app.use('/api', apiKey, designerAccess, jsonBody);
 
   app.post('/api/templates', (req, res) => {
     const t = req.body || {};
     let id = t.id !== undefined && t.id !== '' ? String(t.id) : store.nextId();
     if (!store.validId(id)) return res.status(400).json({ error: 'מספר תבנית יכול להכיל ספרות, אותיות לועזיות, - ו-_' });
-    if (store.templateExists(id) && req.query.overwrite !== '1') return res.status(409).json({ error: `תבנית ${id} כבר קיימת` });
-    res.status(201).json(withPlaceholders(store.saveTemplate(id, sanitizeTemplate(t))));
+    const exists = store.templateExists(id);
+    if (exists && req.query.overwrite !== '1') return res.status(409).json({ error: `תבנית ${id} כבר קיימת` });
+    if (exists) checkCanEdit(req, store.getTemplate(id));
+    const clean = sanitizeTemplate(t);
+    // a customer's designer creates templates for that customer only
+    if (req.role === 'designer') clean.customers = exists ? store.getTemplate(id).customers : [req.customer.id];
+    res.status(201).json(withPlaceholders(store.saveTemplate(id, clean)));
   });
 
   app.put('/api/templates/:id', (req, res) => {
     const body = { ...(req.body || {}) };
     // customer links are managed by their own endpoints: a design save keeps the stored ones
-    body.customers = store.templateExists(req.params.id) ? store.getTemplate(req.params.id).customers || [] : [];
+    const exists = store.templateExists(req.params.id);
+    if (exists) checkCanEdit(req, store.getTemplate(req.params.id));
+    body.customers = exists ? store.getTemplate(req.params.id).customers || [] : req.role === 'designer' ? [req.customer.id] : [];
     res.json(withPlaceholders(store.saveTemplate(req.params.id, sanitizeTemplate(body))));
   });
 
   app.post('/api/templates/:id/duplicate', (req, res) => {
     const { id, name } = req.body || {};
-    res.status(201).json(withPlaceholders(store.duplicateTemplate(req.params.id, id, name)));
+    checkCustomerAccess(req, store.getTemplate(req.params.id));
+    let copy = store.duplicateTemplate(req.params.id, id, name);
+    if (req.role === 'designer') copy = store.saveTemplate(copy.id, { ...copy, customers: [req.customer.id] });
+    res.status(201).json(withPlaceholders(copy));
   });
 
   // only the customer links of a template (from the management screen)
-  app.put('/api/templates/:id/customers', (req, res) => {
+  app.put('/api/templates/:id/customers', adminOnly, (req, res) => {
     const t = store.getTemplate(req.params.id);
     if (!Array.isArray(req.body?.customers)) return res.status(400).json({ error: 'customers חייב להיות רשימה' });
     const ids = req.body.customers.map(String);
@@ -300,6 +383,7 @@ if (full) {
   });
 
   // ---- customers
+  app.use('/api/customers', adminOnly);
   app.get('/api/customers', (req, res) => {
     const templates = store.listTemplates();
     res.json(store.listCustomers().map((c) => ({ ...store.publicCustomer(c), templates: templates.filter((t) => t.customers.includes(c.id)).map((t) => t.id) })));
@@ -315,10 +399,8 @@ if (full) {
   // installation bundle for a client server: all the customer's templates in one file
   app.get('/api/customers/:id/bundle', (req, res) => {
     const c = store.getCustomer(req.params.id);
-    const templates = store.listTemplates().filter((t) => t.customers.includes(c.id)).map((t) => store.getTemplate(t.id));
     res.set('Content-Disposition', `attachment; filename="bundle-customer-${c.id}.json"`);
-    // the key hash lets the client's render server accept that customer's key (the key itself is never stored)
-    res.json({ kind: 'form-designer-bundle', version: 1, createdAt: new Date().toISOString(), customer: { id: c.id, name: c.name, code: c.code, apiKeyHash: c.apiKeyHash, apiKeyHint: c.apiKeyHint }, templates });
+    res.json(bundleFor(c));
   });
 
   // ---- smart design agent
@@ -365,12 +447,13 @@ if (full) {
   }));
 
   app.delete('/api/templates/:id', (req, res) => {
+    checkCanEdit(req, store.getTemplate(req.params.id));
     store.deleteTemplate(req.params.id);
     res.json({ ok: true });
   });
 
-  app.get('/api/templates/:id/history', (req, res) => res.json(store.listHistory(req.params.id)));
-  app.get('/api/templates/:id/history/:version', (req, res) => res.json(store.getHistoryVersion(req.params.id, req.params.version)));
+  app.get('/api/templates/:id/history', (req, res) => { checkCustomerAccess(req, store.getTemplate(req.params.id)); res.json(store.listHistory(req.params.id)); });
+  app.get('/api/templates/:id/history/:version', (req, res) => { checkCustomerAccess(req, store.getTemplate(req.params.id)); res.json(store.getHistoryVersion(req.params.id, req.params.version)); });
   app.get('/api/next-id', (req, res) => res.json({ id: store.nextId() }));
 
   // parse a data sample (XML/JSON) -> data + tree + array paths
@@ -403,12 +486,28 @@ if (full) {
       const pdf = await officeToPdf(buf, ext);
       return res.json({ pdfBase64: pdf.toString('base64') });
     }
+    // a Word file as a sample for the design agent: an exact PDF with LibreOffice,
+    // otherwise (docx) the document's content rendered as rich text
+    if (mode === 'sample') {
+      if (findSoffice()) {
+        try {
+          return res.json({ pdfBase64: (await officeToPdf(buf, ext)).toString('base64'), via: 'libreoffice' });
+        } catch (e) {
+          if (ext !== 'docx') throw e;
+        }
+      }
+      if (ext !== 'docx') return res.status(400).json({ error: 'המרת קובץ זה לדוגמה דורשת LibreOffice בשרת. שמרו אותו כ-docx או כ-PDF' });
+      const { html } = await docxToHtml(buf);
+      const sample = { page: { size: 'A4' }, pages: [{ id: 'p1', elements: [{ id: 'doc', type: 'richtext', x: 15, y: 15, w: 180, h: 267, html, overflow: 'paginate' }] }] };
+      const { pdf } = await renderPdf(sanitizeTemplate(sample), {});
+      return res.json({ pdfBase64: pdf.toString('base64'), via: 'html' });
+    }
     if (ext !== 'docx') return res.status(400).json({ error: 'ייבוא כטקסט עשיר נתמך לקבצי docx בלבד' });
     res.json(await docxToHtml(buf));
   }));
 
-  app.post('/api/fonts', (req, res) => res.json(saveUploadedFont(req.body || {})));
-  app.delete('/api/fonts/:family', (req, res) => res.json(deleteUploadedFont(req.params.family)));
+  app.post('/api/fonts', adminOnly, (req, res) => res.json(saveUploadedFont(req.body || {})));
+  app.delete('/api/fonts/:family', adminOnly, (req, res) => res.json(deleteUploadedFont(req.params.family)));
 }
 
 // ------------------------------------------------------------- static designer
@@ -440,6 +539,8 @@ export function start(port = config.port) {
     if (config.apiKey) console.log('  API key: required');
     else console.warn('  WARNING: FD_API_KEY is not set - the API is open to anyone who can reach this port' + (config.mode === 'render' && store.hasCustomerKeys() ? ' (customer keys are still required for rendering)' : ''));
   });
+  // runtime servers keep their templates in sync with the central repository
+  if (config.mode === 'render') startRepoSync();
   // a request may wait in the render queue: allow long requests
   server.requestTimeout = config.requestTimeoutMs;
   server.headersTimeout = 60000;

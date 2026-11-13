@@ -1,5 +1,8 @@
-# Render-only server on the customer's own network (no designer).
-#   docker compose -f deploy/docker-compose.render.yml up -d --build
+# Runtime (render-only) server on the customer's own network: no designer.
+# It pulls the customer's templates from the central repository by itself.
+#   FD_REPO_URL=https://forms.example.com FD_REPO_KEY=<customer render key> \
+#     docker compose -f deploy/docker-compose.render.yml up -d --build
+# Without a repository connection, install a bundle file instead:
 #   docker compose -f deploy/docker-compose.render.yml exec form-render node cli/import-bundle.js /bundles/bundle-customer-3.json
 services:
   form-render:
@@ -10,6 +13,9 @@ services:
       FD_MODE: render
       FD_API_KEY: ${FD_API_KEY:-}
       FD_MAX_CONCURRENT: ${FD_MAX_CONCURRENT:-4}
+      FD_REPO_URL: ${FD_REPO_URL:-}
+      FD_REPO_KEY: ${FD_REPO_KEY:-}
+      FD_REPO_SYNC_MINUTES: ${FD_REPO_SYNC_MINUTES:-5}
     volumes:
       - fd-render-storage:/app/storage
       - ./bundles:/bundles:ro
