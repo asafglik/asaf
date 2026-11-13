@@ -42,6 +42,7 @@ export function listTemplates() {
           format: t.schema?.format || null,
           placeholders: countPlaceholders(t),
           hasSource: !!t.sourcePdf,
+          languages: [t.defaultLanguage || 'he', ...(t.languages || []).filter((l) => l !== (t.defaultLanguage || 'he'))],
         };
       } catch {
         return null;

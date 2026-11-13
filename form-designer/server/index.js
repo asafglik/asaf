@@ -14,7 +14,7 @@ import { listFonts, fontsCssForWeb, resolveFontFile, saveUploadedFont, deleteUpl
 import { docxToHtml, officeToPdf, findSoffice } from './import.js';
 import { templatePlaceholders } from '../shared/elements.js';
 import { pageSize } from './render/html.js';
-import { autoDesign, designRequest, aiAvailable } from './ai.js';
+import { autoDesign, designRequest, aiAvailable, translateTexts } from './ai.js';
 import { sanitizeTemplate } from './sanitize.js';
 import { decodeBytes, charsetOf } from '../shared/encoding.js';
 
@@ -80,7 +80,8 @@ async function sendRender(req, res, templateId, data, format) {
   const template = store.getTemplate(String(templateId));
   checkCustomerAccess(req, template);
   const started = Date.now();
-  const { pdf, errors, pages, placeholders } = await renderPdf(template, data, { format });
+  const lang = req.query.lang || req.body?.lang || undefined;
+  const { pdf, errors, pages, placeholders } = await renderPdf(template, data, { format, lang });
   const name = pdfFileName(req, template);
   res.set('X-Render-Pages', String(pages));
   res.set('X-Render-Ms', String(Date.now() - started));
@@ -227,6 +228,9 @@ if (full) {
 
   // ---- smart design agent
   app.get('/api/ai/status', (req, res) => res.json({ available: aiAvailable(), model: aiAvailable() ? config.aiModel : null }));
+  app.post('/api/ai/translate', asyncH(async (req, res) => {
+    res.json(await translateTexts(req.body || {}));
+  }));
   app.post('/api/ai/auto-design', asyncH(async (req, res) => {
     res.json(await autoDesign(req.body || {}));
   }));
@@ -259,9 +263,9 @@ if (full) {
 
   // render an unsaved template from the designer
   app.post('/api/preview', asyncH(async (req, res) => {
-    const { template, data, format } = req.body || {};
+    const { template, data, format, lang } = req.body || {};
     if (!template) return res.status(400).json({ error: 'חסרה תבנית' });
-    const { pdf, errors, pages } = await renderPdf(template, data ?? {}, { format });
+    const { pdf, errors, pages } = await renderPdf(template, data ?? {}, { format, lang });
     res.set('X-Render-Pages', String(pages));
     res.set('X-Render-Warnings', encodeURIComponent(JSON.stringify(errors.slice(0, 20))));
     res.type('application/pdf').send(pdf);

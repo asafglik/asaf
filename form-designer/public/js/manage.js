@@ -3,6 +3,8 @@
 import { api } from './api.js';
 import { escapeHtml } from '/shared/elements.js';
 import { readFileAsText, download } from './util.js';
+import { startTour, firstVisit } from './tour.js';
+import { MANAGE_TOUR } from './tour-steps.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 let templates = [];
@@ -363,7 +365,8 @@ function showView(v) {
 }
 
 if (location.hash === '#customers') showView('customers');
-load().catch((e) => toast(e.message, 'error'));
+$('#tour-btn').addEventListener('click', () => { showView('templates'); startTour(MANAGE_TOUR); });
+load().then(() => { if (firstVisit('fd-tour-manage')) setTimeout(() => startTour(MANAGE_TOUR), 500); }).catch((e) => toast(e.message, 'error'));
 api.get('/api/health').then((h) => {
   $('#server-info').textContent = h.chrome ? '' : '⚠ לא נמצא דפדפן להפקת PDF בשרת';
 }).catch(() => {});

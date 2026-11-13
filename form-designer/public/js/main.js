@@ -1,9 +1,12 @@
 // Designer bootstrap: toolbar actions, dialogs, pages, keyboard shortcuts.
 import {
   state, on, emit, change, undo, redo, select, selectedElements, currentPage, uid,
-  newTemplate, loadTemplate, fullTemplate, pageSizeMm, ensureBand, uniquePlaceholder,
+  newTemplate, loadTemplate, fullTemplate, pageSizeMm, ensureBand, uniquePlaceholder, editLang,
 } from './state.js';
 import './agent.js';
+import { startTour, firstVisit } from './tour.js';
+import { DESIGNER_TOUR } from './tour-steps.js';
+import { LANGUAGES, baseLanguage, templateLanguages, missingTranslations } from '/shared/i18n.js';
 import { api, keyQuery } from './api.js';
 import { render, addElement, scrollEl, commitPropsEdit } from './canvas.js';
 import { renderProps, pickFile } from './props.js';
@@ -36,9 +39,25 @@ function toast(msg, kind = '', onUndo = null) {
 
 const pagesText = (n) => (Number(n) === 1 ? 'עמוד אחד' : `${n} עמודים`);
 
+function renderLangSelect() {
+  const t = state.template;
+  const sel = $('#lang-select');
+  const langs = templateLanguages(t);
+  sel.hidden = langs.length < 2;
+  const base = baseLanguage(t);
+  sel.innerHTML = langs.map((l) => `<option value="${l}"${l === editLang() ? ' selected' : ''}>${escapeHtml(LANGUAGES[l].name)}${l === base ? '' : ` · ${missingTranslations(t, l).length ? 'חסר תרגום' : '✓'}`}</option>`).join('');
+  sel.classList.toggle('translating', editLang() !== base);
+}
+$('#lang-select').addEventListener('change', (ev) => {
+  state.lang = ev.target.value === baseLanguage(state.template) ? null : ev.target.value;
+  emit('all');
+  emit('selection');
+});
+
 function updateChrome() {
   const t = state.template;
   if (!t) return;
+  renderLangSelect();
   $('#tpl-num').textContent = t.id ? `#${t.id}` : 'חדש';
   $('#tpl-name').textContent = t.name || 'ללא שם';
   $('#dirty-dot').classList.toggle('on', state.dirty);
@@ -100,6 +119,7 @@ on((w) => {
   }
   if (w === 'focus-props') document.querySelector('#props input, #props textarea')?.focus();
   if (typeof w === 'string' && w.startsWith('open-band:')) openBand(w.slice(10));
+  if (w === 'langs') renderLangSelect();
   if (typeof w === 'string' && w.startsWith('toast:')) {
     const t = JSON.parse(w.slice(6));
     toast(t.msg, '', t.undo ? () => undo() : null);
@@ -467,7 +487,7 @@ async function previewDialog() {
     $('#pv-status', body).textContent = 'מפיק PDF...';
     const t0 = performance.now();
     try {
-      const res = await api.raw('POST', '/api/preview', { template: fullTemplate(), data });
+      const res = await api.raw('POST', '/api/preview', { template: fullTemplate(), data, lang: $('#pv-lang', body)?.value || editLang() });
       const blob = await res.blob();
       if (url) URL.revokeObjectURL(url);
       url = URL.createObjectURL(blob);
@@ -484,12 +504,14 @@ async function previewDialog() {
     wide: true,
     html: `<div class="pv">
       <div class="pv-side"><label class="f f-col"><span>נתונים לבדיקה (XML / JSON)</span><textarea id="pv-data" class="mono" dir="ltr" spellcheck="false">${escapeHtml(sample)}</textarea></label>
+      ${templateLanguages(state.template).length > 1 ? `<label class="f"><span>שפת המסמך</span><select id="pv-lang">${templateLanguages(state.template).map((l) => `<option value="${l}"${l === editLang() ? ' selected' : ''}>${escapeHtml(LANGUAGES[l].name)}</option>`).join('')}</select></label>` : ''}
       <div class="btn-row"><button type="button" class="btn btn-primary" id="pv-run">הפקה מחדש</button><button type="button" class="btn" id="pv-dl">הורדה</button></div>
       <p id="pv-status" class="muted"></p></div>
       <iframe id="pv-frame" class="pv-frame" title="PDF"></iframe></div>`,
     buttons: [{ label: 'סגירה' }],
     onOpen: (body) => {
       $('#pv-run', body).onclick = () => run(body);
+      $('#pv-lang', body)?.addEventListener('change', () => run(body));
       run(body);
     },
   });
@@ -519,6 +541,29 @@ async function apiHelp() {
     <p>להתקנה בשרת לקוח: מעתיקים את התיקייה, מריצים <code dir="ltr">npm install --omit=dev</code> ו-<code dir="ltr">npm run start:render</code>, ומעתיקים את קובצי התבניות מ-<code dir="ltr">storage/templates</code>. פרטים ב-README.</p>`,
     buttons: [{ label: 'סגירה', primary: true }],
   });
+}
+
+/** Translate every missing text of every extra language with the design agent. */
+async function autoTranslate() {
+  const t = state.template;
+  const base = baseLanguage(t);
+  const targets = templateLanguages(t).filter((l) => l !== base && missingTranslations(t, l).length);
+  if (!targets.length) return toast('כל הטקסטים כבר מתורגמים', 'ok');
+  toast('מתרגם...');
+  let done = 0;
+  for (const lang of targets) {
+    const miss = missingTranslations(t, lang);
+    const r = await api.post('/api/ai/translate', { from: base, to: lang, texts: miss.map((m) => m.text) });
+    // owners are live objects of the current template: apply in one undoable change
+    change(() => miss.forEach((m, i) => {
+      const v = r.translations[i];
+      if (!v) return;
+      m.owner.tr = m.owner.tr || {};
+      m.owner.tr[lang] = { ...(m.owner.tr[lang] || {}), [m.key]: v };
+      done++;
+    }));
+  }
+  toast(`תורגמו ${done} טקסטים. בדקו את התרגום בבחירת השפה בסרגל העליון.`, 'ok', () => undo());
 }
 
 async function placeholdersDialog() {
@@ -718,6 +763,7 @@ async function runAction(a) {
         gotoPage(Math.min(state.pageIndex, state.template.pages.length - 1));
         break;
       case 'band-exit': gotoPage(state.pageIndex); break;
+      case 'auto-translate': await autoTranslate(); break;
       case 'agent-tab': showTab('agent'); break;
       case 'manage': location.href = '/'; break;
       case 'header': openBand('header'); showTab('pages'); break;
@@ -826,9 +872,11 @@ async function init() {
   if (!opened) { startNew(); state.dirty = false; zoomFit(); renderTree(); }
   updateChrome();
   renderProps();
+  if (firstVisit('fd-tour-designer')) setTimeout(() => startTour(DESIGNER_TOUR, { onEnd: () => showTab('tools') }), 600);
 }
 
 window.addEventListener('resize', () => { if (state.template) render(); });
+$('#tour-btn').addEventListener('click', () => startTour(DESIGNER_TOUR, { onEnd: () => showTab('tools') }));
 window.addEventListener('hashchange', async () => {
   const id = decodeURIComponent(location.hash.slice(1));
   if (!id || id === state.template?.id) return;

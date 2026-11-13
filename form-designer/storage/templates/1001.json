@@ -1,6 +1,11 @@
 {
   "id": "1001",
   "name": "חשבונית מס - דוגמה",
+  "defaultLanguage": "he",
+  "languages": [
+    "he",
+    "en"
+  ],
   "description": "תבנית לדוגמה: טבלת פריטים עם מעבר עמודים, שדות מחושבים, QR, ברקוד, כותרת תחתונה ואזור חתימה",
   "version": 1,
   "page": {
@@ -37,6 +42,11 @@
         "w": 186,
         "h": 6,
         "text": "עמוד {{page}} מתוך {{pages}}",
+        "tr": {
+          "en": {
+            "text": "Page {{page}} of {{pages}}"
+          }
+        },
         "style": {
           "fontFamily": "Heebo",
           "fontSize": 8,
@@ -85,6 +95,11 @@
           "w": 128,
           "h": 12,
           "text": "ח.פ. {{company.taxId}}\n{{company.address}}",
+          "tr": {
+            "en": {
+              "text": "Company No. {{company.taxId}}\n{{company.address}}"
+            }
+          },
           "style": {
             "fontFamily": "Heebo",
             "fontSize": 9,
@@ -115,6 +130,11 @@
           "w": 88,
           "h": 10,
           "text": "חשבונית מס מספר {{@number}}",
+          "tr": {
+            "en": {
+              "text": "Tax Invoice No. {{@number}}"
+            }
+          },
           "style": {
             "fontFamily": "Heebo",
             "fontSize": 16,
@@ -130,6 +150,11 @@
           "w": 80,
           "h": 14,
           "text": "תאריך: {{date | date:dd/MM/yyyy}}\nלתשלום עד: {{dueDate | date:dd/MM/yyyy}}",
+          "tr": {
+            "en": {
+              "text": "Date: {{date | date:d MMMM yyyy}}\nDue: {{dueDate | date:d MMMM yyyy}}"
+            }
+          },
           "style": {
             "fontFamily": "Heebo",
             "fontSize": 9.5,
@@ -158,6 +183,11 @@
           "w": 82,
           "h": 22,
           "text": "לכבוד: {{customer.name}}\nת.ז.: {{customer.id}}\n{{customer.address}}\n{{customer.email}}",
+          "tr": {
+            "en": {
+              "text": "To: {{customer.name}}\nID: {{customer.id}}\n{{customer.address}}\n{{customer.email}}"
+            }
+          },
           "style": {
             "fontFamily": "Heebo",
             "fontSize": 10,
@@ -173,6 +203,11 @@
           "w": 60,
           "h": 8,
           "text": "לקוח VIP ★",
+          "tr": {
+            "en": {
+              "text": "★ VIP customer"
+            }
+          },
           "visibleIf": "customer.vip == true",
           "style": {
             "fontFamily": "Heebo",
@@ -219,6 +254,11 @@
             {
               "id": "c2",
               "header": "מק\"ט",
+              "tr": {
+                "en": {
+                  "header": "SKU"
+                }
+              },
               "binding": "sku",
               "width": 1.3,
               "align": "center",
@@ -227,12 +267,22 @@
             {
               "id": "c3",
               "header": "תיאור",
+              "tr": {
+                "en": {
+                  "header": "Description"
+                }
+              },
               "binding": "description",
               "width": 4.5
             },
             {
               "id": "c4",
               "header": "כמות",
+              "tr": {
+                "en": {
+                  "header": "Qty"
+                }
+              },
               "binding": "qty",
               "width": 1,
               "align": "center",
@@ -245,11 +295,22 @@
               "width": 1.6,
               "align": "left",
               "format": "currency",
-              "footer": "סה\"כ לפני מע\"מ"
+              "footer": "סה\"כ לפני מע\"מ",
+              "tr": {
+                "en": {
+                  "header": "Unit price",
+                  "footer": "Subtotal"
+                }
+              }
             },
             {
               "id": "c6",
               "header": "סה\"כ",
+              "tr": {
+                "en": {
+                  "header": "Total"
+                }
+              },
               "expression": "price * qty",
               "width": 1.7,
               "align": "left",
@@ -266,6 +327,11 @@
           "w": 38,
           "h": 7,
           "text": "מע\"מ ({{vat}}%):",
+          "tr": {
+            "en": {
+              "text": "VAT ({{vat}}%):"
+            }
+          },
           "style": {
             "fontFamily": "Heebo",
             "fontSize": 10,
@@ -298,6 +364,11 @@
           "w": 38,
           "h": 8,
           "text": "סה\"כ לתשלום:",
+          "tr": {
+            "en": {
+              "text": "Total due:"
+            }
+          },
           "style": {
             "fontFamily": "Heebo",
             "fontSize": 12,
@@ -374,6 +445,11 @@
           "h": 16,
           "placeholder": "customer_signature",
           "label": "חתימת הלקוח",
+          "tr": {
+            "en": {
+              "label": "Customer signature"
+            }
+          },
           "signer": "לקוח",
           "required": true,
           "showOn": "last",

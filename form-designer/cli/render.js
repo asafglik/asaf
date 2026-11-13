@@ -16,7 +16,7 @@ for (let i = 2; i < process.argv.length; i++) {
 
 if (args.help || (!args.template && !args['template-file'])) {
   console.log(`Usage:
-  form-render --template <id> --data <file.xml|file.json|-> --out <file.pdf> [--storage <dir>]
+  form-render --template <id> --data <file.xml|file.json|-> --out <file.pdf> [--lang en] [--storage <dir>]
   form-render --template-file <template.json> --data <file> --out <file.pdf>`);
   process.exit(args.help ? 0 : 1);
 }
@@ -29,7 +29,7 @@ try {
   const template = args['template-file'] ? JSON.parse(fs.readFileSync(args['template-file'], 'utf8')) : getTemplate(String(args.template));
   const { decodeBytes } = await import('../shared/encoding.js');
   const data = !args.data ? '{}' : decodeBytes(fs.readFileSync(args.data === '-' ? 0 : args.data));
-  const { pdf, errors, pages } = await renderPdf(template, data, { format: args.format });
+  const { pdf, errors, pages } = await renderPdf(template, data, { format: args.format, lang: args.lang });
   const out = args.out || `${template.id || 'out'}.pdf`;
   fs.writeFileSync(out, pdf);
   console.log(`${out}: ${pages} page(s)`);

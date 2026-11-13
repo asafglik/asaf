@@ -51,6 +51,9 @@ function cleanList(list) {
   return (Array.isArray(list) ? list : []).filter((e) => e && typeof e === 'object').map((e) => {
     const c = cleanElement(e);
     if (c.type === 'richtext') c.html = sanitizeRichHtml(c.html);
+    if (c.tr && typeof c.tr === 'object') {
+      c.tr = Object.fromEntries(Object.entries(c.tr).filter(([l]) => /^[a-z]{2}$/.test(l)).map(([l, v]) => [l, { ...v, ...(v && v.html ? { html: sanitizeRichHtml(v.html) } : {}) }]));
+    }
     return c;
   });
 }
@@ -80,6 +83,9 @@ export function sanitizeTemplate(t) {
       arrays: (Array.isArray(t.schema.arrays) ? t.schema.arrays : []).map(String),
     };
   }
+  if (out.languages) out.languages = (Array.isArray(out.languages) ? out.languages : []).map(String).filter((l) => /^[a-z]{2}$/.test(l));
+  if (out.defaultLanguage && !/^[a-z]{2}$/.test(out.defaultLanguage)) delete out.defaultLanguage;
+  if (out.mirrorLayout && !['auto', 'never'].includes(out.mirrorLayout)) delete out.mirrorLayout;
   if (out.customers) out.customers = (Array.isArray(out.customers) ? out.customers : []).map(String);
   if (out.sourcePdf && typeof out.sourcePdf !== 'string') delete out.sourcePdf;
   for (const k of ['name', 'description']) if (out[k] !== undefined) out[k] = String(out[k]).slice(0, 500);

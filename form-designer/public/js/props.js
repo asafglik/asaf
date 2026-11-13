@@ -1,5 +1,6 @@
 // Properties panel for the selected element(s), or the page when nothing is selected.
-import { state, on, change, selectedElements, currentPage, uid, emit, pageSizeMm, allContainers } from './state.js';
+import { state, on, change, selectedElements, currentPage, uid, emit, pageSizeMm, canvasSizeMm, allContainers, pageMargins, editLang, isTranslating, isTranslatable, getText, setText } from './state.js';
+import { LANGUAGES, baseLanguage, templateLanguages, missingTranslations } from '/shared/i18n.js';
 import { escapeHtml, PAGE_SIZES } from '/shared/elements.js';
 import { FORMAT_PRESETS } from '/shared/format.js';
 import { validateExpr, tryEval, FUNCTION_HELP, exprPath } from '/shared/expr.js';
@@ -30,18 +31,24 @@ function setPath(o, path, v) {
 const opt = (v, l, cur) => `<option value="${escapeHtml(v)}"${String(cur ?? '') === String(v) ? ' selected' : ''}>${escapeHtml(l)}</option>`;
 
 function val(els, key, dflt = '') {
-  const v = getPath(els[0], key);
-  const same = els.every((e) => JSON.stringify(getPath(e, key)) === JSON.stringify(v));
+  const get = (e) => (isTranslatable(key) ? getText(e, key) : getPath(e, key));
+  const v = get(els[0]);
+  const same = els.every((e) => JSON.stringify(get(e)) === JSON.stringify(v));
   return same ? (v ?? dflt) : '';
+}
+
+/** Placeholder for a translated field: the text in the default language. */
+function trHint(els, key, fallback) {
+  return isTranslating() && isTranslatable(key) ? String(getPath(els[0], key) ?? '').slice(0, 120) : fallback;
 }
 
 const fields = {
   num: (label, key, { step = 0.5, min, suffix = '', dflt = '' } = {}) => (els) =>
     `<label class="f"><span>${label}</span><span class="f-num"><input type="number" data-key="${key}" data-type="num" step="${step}"${min !== undefined ? ` min="${min}"` : ''} value="${escapeHtml(val(els, key, dflt))}">${suffix ? `<em>${suffix}</em>` : ''}</span></label>`,
   text: (label, key, { placeholder = '', list = '' } = {}) => (els) =>
-    `<label class="f"><span>${label}</span><input type="text" data-key="${key}" value="${escapeHtml(val(els, key))}" placeholder="${escapeHtml(placeholder)}"${list ? ` list="${list}"` : ''} dir="auto"></label>`,
+    `<label class="f${isTranslating() && isTranslatable(key) ? ' f-tr' : ''}"><span>${label}</span><input type="text" data-key="${key}" value="${escapeHtml(val(els, key))}" placeholder="${escapeHtml(trHint(els, key, placeholder))}"${list ? ` list="${list}"` : ''} dir="auto"></label>`,
   area: (label, key, { rows = 3, placeholder = '', mono = false } = {}) => (els) =>
-    `<label class="f f-col"><span>${label}</span><textarea data-key="${key}" rows="${rows}" placeholder="${escapeHtml(placeholder)}" dir="auto"${mono ? ' class="mono"' : ''}>${escapeHtml(val(els, key))}</textarea></label>`,
+    `<label class="f f-col${isTranslating() && isTranslatable(key) ? ' f-tr' : ''}"><span>${label}${isTranslating() && isTranslatable(key) ? ` <em class="tr-badge">${escapeHtml(LANGUAGES[editLang()].name)}</em>` : ''}</span><textarea data-key="${key}" rows="${rows}" placeholder="${escapeHtml(trHint(els, key, placeholder))}" dir="auto"${mono ? ' class="mono"' : ''}>${escapeHtml(val(els, key))}</textarea></label>`,
   color: (label, key, { allowEmpty = true } = {}) => (els) => {
     const v = val(els, key);
     return `<label class="f"><span>${label}</span><span class="f-color"><input type="color" data-key="${key}" value="${escapeHtml(v || '#ffffff')}"${!v && allowEmpty ? ' data-empty="1"' : ''}>${allowEmpty ? `<button class="mini" data-clear="${key}" title="ללא צבע">✕</button>` : ''}<code>${escapeHtml(v || 'ללא')}</code></span></label>`;
@@ -305,9 +312,9 @@ function tableGroups(el) {
       <summary><span class="col-n">${i + 1}</span><span class="col-t">${escapeHtml(c.header || '(ללא כותרת)')}</span><span class="col-b">${escapeHtml(c.expression ? 'ƒ ' + c.expression : c.binding || '')}</span>
         <span class="col-actions"><button class="mini" data-colmove="${i}:-1" title="הזז ימינה">→</button><button class="mini" data-colmove="${i}:1" title="הזז שמאלה">←</button><button class="mini danger" data-coldel="${i}" title="מחיקה">✕</button></span></summary>
       <div class="pg-body">
-        ${colField('כותרת', i, 'header', c.header)}
+        ${colField('כותרת', i, 'header', c.header, { col: c })}
         <label class="f"><span>סוג תא</span><select data-colkey="${i}.cellType">${[['', 'ערך'], ['text', 'טקסט עם שדות'], ['image', 'תמונה'], ['barcode', 'ברקוד']].map(([v, l]) => opt(v, l, c.cellType || '')).join('')}</select></label>
-        ${c.cellType === 'text' ? colField('טקסט', i, 'text', c.text, { placeholder: '{{sku}} - {{description}}' }) : colField('שדה', i, 'binding', c.binding, { list: 'dl-item', placeholder: 'שדה בשורה' })}
+        ${c.cellType === 'text' ? colField('טקסט', i, 'text', c.text, { placeholder: '{{sku}} - {{description}}', col: c }) : colField('שדה', i, 'binding', c.binding, { list: 'dl-item', placeholder: 'שדה בשורה' })}
         ${c.cellType === 'text' ? '' : `<label class="f f-col"><span>או ביטוי מחושב</span><textarea class="mono" dir="ltr" rows="1" data-colkey="${i}.expression" placeholder="price * qty">${escapeHtml(c.expression || '')}</textarea>${c.expression && validateExpr(c.expression) ? `<div class="expr-err">${escapeHtml(validateExpr(c.expression))}</div>` : ''}</label>`}
         ${c.cellType === 'barcode' ? `<label class="f"><span>סוג ברקוד</span><select data-colkey="${i}.symbology">${state.symbologies.map((s) => opt(s.id, s.label, c.symbology || 'code128')).join('')}</select></label>` : ''}
         ${c.cellType === 'image' || c.cellType === 'barcode' ? colField('גובה (מ"מ)', i, 'imageHeight', c.imageHeight ?? 10, { type: 'number' }) : ''}
@@ -320,7 +327,7 @@ function tableGroups(el) {
           <label class="f f-check"><input type="checkbox" data-colkey="${i}.bold" data-type="bool"${c.bold ? ' checked' : ''}><span>מודגש</span></label>
           <label class="f"><span>צבע</span><input type="color" data-colkey="${i}.color" value="${escapeHtml(c.color || '#000000')}"></label>
         </div>
-        ${colField('שורת סיכום', i, 'footer', c.footer, { placeholder: '{{sum($rows, price*qty) | currency}}' })}
+        ${colField('שורת סיכום', i, 'footer', c.footer, { placeholder: '{{sum($rows, price*qty) | currency}}', col: c })}
       </div>
     </details>`).join('');
 
@@ -365,8 +372,12 @@ function tableGroups(el) {
   ].filter(Boolean);
 }
 
-function colField(label, i, key, v, { type = 'text', list = '', placeholder = '', step = '', dir = 'auto' } = {}) {
-  return `<label class="f"><span>${label}</span><input type="${type}" data-colkey="${i}.${key}" value="${escapeHtml(v ?? '')}"${list ? ` list="${list}"` : ''}${step ? ` step="${step}"` : ''} placeholder="${escapeHtml(placeholder)}" dir="${dir}"></label>`;
+function colField(label, i, key, v, { type = 'text', list = '', placeholder = '', step = '', dir = 'auto', col } = {}) {
+  if (col && isTranslating() && isTranslatable(key)) {
+    v = getText(col, key);
+    placeholder = String(col[key] ?? '');
+  }
+  return `<label class="f${col && isTranslating() && isTranslatable(key) ? ' f-tr' : ''}"><span>${label}</span><input type="${type}" data-colkey="${i}.${key}" value="${escapeHtml(v ?? '')}"${list ? ` list="${list}"` : ''}${step ? ` step="${step}"` : ''} placeholder="${escapeHtml(placeholder)}" dir="${dir}"></label>`;
 }
 
 // ---------------------------------------------------------------- page panel
@@ -384,6 +395,26 @@ function bandPanel() {
   </div></details>`;
 }
 
+function languagesGroup() {
+  const t = state.template;
+  const base = baseLanguage(t);
+  const langs = templateLanguages(t);
+  const rows = Object.entries(LANGUAGES).map(([code, l]) => {
+    const on = langs.includes(code);
+    const miss = on && code !== base ? missingTranslations(t, code).length : 0;
+    return `<label class="lang-row"><input type="checkbox" data-lang-on="${code}"${on ? ' checked' : ''}${code === base ? ' disabled' : ''}>
+      <span class="lang-name">${escapeHtml(l.name)}</span><span class="muted">${l.dir === 'rtl' ? 'RTL' : 'LTR'}</span>
+      ${code === base ? '<span class="tag">ברירת מחדל</span>' : on ? (miss ? `<button class="link" data-lang-edit="${code}" type="button">${miss} לתרגום</button>` : '<span class="ok-text">✓ מתורגם</span>') : ''}</label>`;
+  }).join('');
+  return `<details class="pg"${langs.length > 1 ? ' open' : ''}><summary>שפות (${langs.length})</summary><div class="pg-body">
+    <label class="f"><span>שפת ברירת מחדל</span><select data-tkey="defaultLanguage">${Object.entries(LANGUAGES).map(([c, l]) => opt(c, l.name, base)).join('')}</select></label>
+    <div class="lang-list">${rows}</div>
+    ${langs.length > 1 ? '<button class="btn btn-block" data-action="auto-translate" type="button">✨ תרגום אוטומטי של טקסטים חסרים</button>' : ''}
+    <label class="f"><span>פריסה בשפה בכיוון השני</span><select data-tkey="mirrorLayout">${opt('auto', 'שיקוף הדף (מומלץ)', t.mirrorLayout || 'auto')}${opt('never', 'מיקומים כמו במקור', t.mirrorLayout || 'auto')}</select></label>
+    <p class="hint">בוחרים שפה לעריכה בסרגל העליון. בשפה שנכתבת בכיוון השני (למשל אנגלית בתבנית עברית) הכיוון והיישור מתהפכים, ובמצב "שיקוף" גם מיקומי הרכיבים משתקפים בדף המודפס (לא בעמודים עם רקע PDF). במעצב המיקומים מוצגים כמו במקור – התצוגה המקדימה מראה את התוצאה. בהפקה: <code dir="ltr">?lang=en</code>. בתנאים אפשר להשתמש ב-<code dir="ltr">$lang</code>.</p>
+  </div></details>`;
+}
+
 function pagePanel() {
   const t = state.template;
   const page = currentPage();
@@ -396,6 +427,7 @@ function pagePanel() {
     <label class="f"><span>שם</span><input type="text" data-tkey="name" value="${escapeHtml(t.name || '')}"></label>
     <label class="f f-col"><span>תיאור</span><textarea data-tkey="description" rows="2">${escapeHtml(t.description || '')}</textarea></label>
   </div></details>
+  ${languagesGroup()}
   <details class="pg" open><summary>גודל דף</summary><div class="pg-body">
     <label class="f"><span>גודל</span><select data-tkey="page.size">${[...Object.keys(PAGE_SIZES), 'custom'].map((s) => opt(s, s === 'custom' ? 'מותאם אישית' : s, custom ? 'custom' : t.page.size)).join('')}</select></label>
     ${custom ? `<div class="f-grid"><label class="f"><span>רוחב</span><input type="number" data-tkey="page.width" data-type="num" value="${w}"></label><label class="f"><span>גובה</span><input type="number" data-tkey="page.height" data-type="num" value="${h}"></label></div>` : ''}
@@ -407,7 +439,11 @@ function pagePanel() {
     <div class="f"><span>רקע</span><span class="muted">${bg.type === 'pdf' ? `עמוד ${bg.pageIndex + 1} מקובץ מקור` : bg.type === 'image' ? 'תמונה' : 'ללא'}</span></div>
     <div class="btn-row"><button class="btn" data-action="bg-image">תמונת רקע...</button>${bg.type ? '<button class="btn" data-action="bg-clear">הסרת רקע</button>' : ''}</div>
   </div></details>
-  <details class="pg"><summary>רשת והצמדה</summary><div class="pg-body">
+  <details class="pg"><summary>שוליים, רשת והצמדה</summary><div class="pg-body">
+    <div class="f-grid">${['right', 'left', 'top', 'bottom'].map((k) => `<label class="f"><span>${{ right: 'שוליים ימין', left: 'שוליים שמאל', top: 'שוליים עליונים', bottom: 'שוליים תחתונים' }[k]}</span><span class="f-num"><input type="number" step="1" min="0" data-tkey="page.margins.${k}" data-type="num" value="${pageMargins()[k]}"><em>מ"מ</em></span></label>`).join('')}</div>
+    <label class="f f-check"><input type="checkbox" data-skey="showMargins" data-type="bool"${state.showMargins ? ' checked' : ''}><span>הצג קווי שוליים</span></label>
+    <label class="f f-check"><input type="checkbox" data-skey="smartGuides" data-type="bool"${state.smartGuides ? ' checked' : ''}><span>הצמדה חכמה לרכיבים ולשוליים</span></label>
+    <p class="hint">בזמן גרירה הרכיב נצמד לקצוות ולמרכז של רכיבים אחרים, לשוליים ולמרכז הדף, ומוצגים קווי עזר. החזיקו Alt לגרירה חופשית.</p>
     <label class="f"><span>הצמדה לרשת</span><select data-skey="grid">${[[0, 'ללא'], [0.5, '0.5 מ"מ'], [1, '1 מ"מ'], [2, '2 מ"מ'], [2.5, '2.5 מ"מ'], [5, '5 מ"מ']].map(([v, l]) => opt(v, l, state.grid)).join('')}</select></label>
     <label class="f f-check"><input type="checkbox" data-skey="showGrid" data-type="bool"${state.showGrid ? ' checked' : ''}><span>הצג רשת</span></label>
   </div></details>
@@ -424,19 +460,31 @@ export function renderProps() {
   }
   const types = new Set(els.map((e) => e.type));
   const type = types.size === 1 ? els[0].type : null;
-  let html = `<div class="props-title"><strong>${type ? TYPE_LABELS[type] : `${els.length} רכיבים`}</strong>
+  let html = (isTranslating() ? `<div class="tr-banner">עורכים תרגום ל<b>${escapeHtml(LANGUAGES[editLang()].name)}</b>. שדה ריק = הטקסט בשפת ברירת המחדל.</div>` : '') + `<div class="props-title"><strong>${type ? TYPE_LABELS[type] : `${els.length} רכיבים`}</strong>
     <span class="props-actions">
       <button class="mini" data-action="z-front" title="הבא לחזית">⬆</button>
       <button class="mini" data-action="z-back" title="שלח לרקע">⬇</button>
       <button class="mini" data-action="duplicate" title="שכפול (Ctrl+D)">⧉</button>
       <button class="mini danger" data-action="delete" title="מחיקה (Delete)">🗑</button>
     </span></div>`;
-  if (els.length > 1) {
-    html += `<div class="align-bar">
-      <button class="mini" data-align="right" title="יישור לימין">⇥</button><button class="mini" data-align="hcenter" title="מרכוז אופקי">↔</button><button class="mini" data-align="left" title="יישור לשמאל">⇤</button>
-      <button class="mini" data-align="top" title="יישור למעלה">⤒</button><button class="mini" data-align="vcenter" title="מרכוז אנכי">↕</button><button class="mini" data-align="bottom" title="יישור למטה">⤓</button>
-      <button class="mini" data-align="same-w" title="אותו רוחב">↔=</button><button class="mini" data-align="same-h" title="אותו גובה">↕=</button>
-      <button class="mini" data-align="dist-v" title="פיזור אנכי שווה">☰</button></div>`;
+  {
+    // single element: relative to the page margins; several: to the group or the first selected one
+    const to = els.length === 1 ? 'page' : state.alignTo;
+    const multi = els.length > 1;
+    html += `<div class="align-panel">
+      <div class="align-to">${multi ? `<span>יישור ביחס ל</span><div class="seg">
+        <button class="${to === 'selection' ? 'on' : ''}" data-alignto="selection" title="לגבולות כל הרכיבים שנבחרו">הבחירה</button>
+        <button class="${to === 'first' ? 'on' : ''}" data-alignto="first" title="לרכיב שנבחר ראשון (מסומן בכתום)">הרכיב הראשון</button>
+        <button class="${to === 'page' ? 'on' : ''}" data-alignto="page" title="לשוליים של הדף">הדף</button></div>` : '<span>יישור לשולי הדף</span>'}</div>
+      <div class="align-bar">
+        <button class="mini" data-align="right" title="הצמדה לימין">⇥</button><button class="mini" data-align="hcenter" title="מרכוז אופקי">↔</button><button class="mini" data-align="left" title="הצמדה לשמאל">⇤</button>
+        <span class="ab-sep"></span>
+        <button class="mini" data-align="top" title="הצמדה למעלה">⤒</button><button class="mini" data-align="vcenter" title="מרכוז אנכי">↕</button><button class="mini" data-align="bottom" title="הצמדה למטה">⤓</button>
+        ${multi ? `<span class="ab-sep"></span>
+        <button class="mini" data-align="same-w" title="אותו רוחב כמו הרכיב הראשון">↔=</button><button class="mini" data-align="same-h" title="אותו גובה כמו הרכיב הראשון">↕=</button>
+        <button class="mini" data-align="dist-h" title="פיזור אופקי במרווחים שווים">⋯</button><button class="mini" data-align="dist-v" title="פיזור אנכי במרווחים שווים">⋮</button>` : `<span class="ab-sep"></span>
+        <button class="mini" data-align="fill-w" title="רוחב מלא בין השוליים">⟷</button>`}
+      </div></div>`;
   }
   const parts = [];
   if (type) {
@@ -460,7 +508,7 @@ function parseInput(t) {
 
 function applyToSelected(key, v) {
   const els = selectedElements();
-  change(() => els.forEach((e) => setPath(e, key, v)), 'props-edit');
+  change(() => els.forEach((e) => (isTranslatable(key) ? setText(e, key, v) : setPath(e, key, v))), 'props-edit');
 }
 
 panel.addEventListener('change', (ev) => {
@@ -481,12 +529,22 @@ panel.addEventListener('change', (ev) => {
     const el = selectedElements()[0];
     const c = el.columns[+i];
     state.openCol = c.id;
-    change(() => setPath(c, key, parseInput(t)), 'props-edit');
+    change(() => (isTranslatable(key) ? setText(c, key, parseInput(t)) : setPath(c, key, parseInput(t))), 'props-edit');
     rerenderSoon();
   } else if (t.dataset.tkey) {
     change((tpl) => setPath(tpl, t.dataset.tkey, parseInput(t)), t.dataset.tkey.startsWith('page') ? 'all' : 'meta');
   } else if (t.dataset.pkey) {
     change(() => setPath(currentPage(), t.dataset.pkey, parseInput(t)), 'all');
+  } else if (t.dataset.langOn) {
+    const code = t.dataset.langOn;
+    change((tpl) => {
+      const set = new Set(templateLanguages(tpl));
+      if (t.checked) set.add(code);
+      else set.delete(code);
+      tpl.languages = [...set];
+    }, 'all');
+    if (!t.checked && state.lang === code) { state.lang = null; emit('all'); }
+    emit('langs');
   } else if (t.dataset.bkey) {
     change(() => setPath(currentPage(), t.dataset.bkey, parseInput(t)), 'all');
   } else if (t.dataset.crule) {
@@ -504,9 +562,9 @@ panel.addEventListener('change', (ev) => {
     const el = selectedElements()[0];
     const ta = panel.querySelector(`[data-key="${t.dataset.insert}"]`);
     const ins = p === 'page' || p === 'pages' ? `{{${p}}}` : `{{${exprPath(p)}}}`;
-    const cur = el[t.dataset.insert] || '';
+    const cur = getText(el, t.dataset.insert) || '';
     const pos = ta && document.activeElement !== ta && ta.selectionStart !== undefined ? ta.selectionStart : cur.length;
-    change(() => { el[t.dataset.insert] = cur.slice(0, pos) + ins + cur.slice(pos); }, 'props-edit');
+    change(() => setText(el, t.dataset.insert, cur.slice(0, pos) + ins + cur.slice(pos)), 'props-edit');
     rerenderSoon();
   }
 });
@@ -563,6 +621,14 @@ panel.addEventListener('click', (ev) => {
   } else if (b.hasAttribute('data-cond-reset')) {
     change(() => els.forEach((e) => { delete e.visibleIf; e.condition = { join: 'and', rules: [{ path: '', op: '==', value: '' }] }; }), 'props-edit');
     rerenderSoon();
+  } else if (b.dataset.langEdit) {
+    state.lang = b.dataset.langEdit;
+    emit('langs');
+    emit('all');
+  } else if (b.dataset.alignto) {
+    state.alignTo = b.dataset.alignto;
+    rerenderSoon();
+    emit('selection');
   } else if (b.dataset.align) {
     alignSelected(b.dataset.align);
   } else if (b.dataset.coldel !== undefined) {
@@ -626,22 +692,43 @@ export function pickFile(accept) {
 
 function alignSelected(how) {
   const els = selectedElements().filter((e) => !e.locked);
-  if (els.length < 2) return;
-  const minX = Math.min(...els.map((e) => e.x));
-  const maxX = Math.max(...els.map((e) => e.x + e.w));
-  const minY = Math.min(...els.map((e) => e.y));
-  const maxY = Math.max(...els.map((e) => e.y + e.h));
-  const ref = els[0];
+  if (!els.length) return;
+  const to = els.length === 1 ? 'page' : state.alignTo;
+  const ref = els[0]; // the first selected element
+  let minX; let maxX; let minY; let maxY;
+  if (to === 'page') {
+    const { w, h } = canvasSizeMm();
+    const m = state.band ? { top: 0, right: 0, bottom: 0, left: 0 } : pageMargins();
+    [minX, maxX, minY, maxY] = [m.left, w - m.right, m.top, h - m.bottom];
+  } else if (to === 'first') {
+    [minX, maxX, minY, maxY] = [ref.x, ref.x + ref.w, ref.y, ref.y + ref.h];
+  } else {
+    minX = Math.min(...els.map((e) => e.x));
+    maxX = Math.max(...els.map((e) => e.x + e.w));
+    minY = Math.min(...els.map((e) => e.y));
+    maxY = Math.max(...els.map((e) => e.y + e.h));
+  }
+  const r1 = (v) => Math.round(v * 10) / 10;
   change(() => {
     for (const e of els) {
+      if (to === 'first' && e === ref && !['same-w', 'same-h'].includes(how)) continue;
+      if (how === 'fill-w') { e.x = minX; e.w = r1(maxX - minX); }
       if (how === 'left') e.x = minX;
       if (how === 'right') e.x = maxX - e.w;
-      if (how === 'hcenter') e.x = (minX + maxX) / 2 - e.w / 2;
+      if (how === 'hcenter') e.x = r1((minX + maxX) / 2 - e.w / 2);
       if (how === 'top') e.y = minY;
       if (how === 'bottom') e.y = maxY - e.h;
-      if (how === 'vcenter') e.y = (minY + maxY) / 2 - e.h / 2;
+      if (how === 'vcenter') e.y = r1((minY + maxY) / 2 - e.h / 2);
       if (how === 'same-w') e.w = ref.w;
       if (how === 'same-h') e.h = ref.h;
+    }
+    if (how === 'dist-h' && els.length > 2) {
+      const s = [...els].sort((a, b) => a.x - b.x);
+      const x0 = s[0].x;
+      const x1 = s[s.length - 1].x + s[s.length - 1].w;
+      const gap = (x1 - x0 - s.reduce((a, e) => a + e.w, 0)) / (s.length - 1);
+      let x = x0;
+      for (const e of s) { e.x = r1(x); x += e.w + gap; }
     }
     if (how === 'dist-v') {
       const s = [...els].sort((a, b) => a.y - b.y);

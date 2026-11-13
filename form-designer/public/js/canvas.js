@@ -1,6 +1,8 @@
 // The design surface: renders the current page with the same element HTML
 // the server prints, and handles selection, moving, resizing and dropping.
-import { state, on, change, select, currentPage, selectedElements, pageSizeMm, canvasSizeMm, findElement, emit, uid } from './state.js';
+import { state, on, change, select, currentPage, selectedElements, pageSizeMm, canvasSizeMm, findElement, emit, uid, pageMargins, editLang, getText, setText } from './state.js';
+import { localizeElement, baseLanguage } from '/shared/i18n.js';
+import { setFormatLanguage } from '/shared/format.js';
 import { elementInnerHtml, elementOuterCss, BASE_CSS, MM, escapeHtml, bandElements, isVisible } from '/shared/elements.js';
 import { scopeFor, exprPath } from '/shared/expr.js';
 import { createElement, elementFromNode } from './factory.js';
@@ -30,10 +32,13 @@ export function designCtx() {
 }
 
 export function designScope() {
-  return scopeFor(state.showData ? state.data : {});
+  const d = state.showData ? state.data : {};
+  return scopeFor(d && typeof d === 'object' && !Array.isArray(d) ? { ...d, $lang: editLang() } : d);
 }
 
-function elementNode(el, scope, ctx) {
+function elementNode(src, scope, ctx) {
+  // the element as it prints in the language being edited
+  const el = localizeElement(src, editLang(), baseLanguage(state.template));
   const d = document.createElement('div');
   d.className = `fd-el fd-${el.type}` + (el.locked ? ' is-locked' : '') + (el.visibleIf ? ' has-cond' : '') + (el.showOn && el.showOn !== 'all' ? ' has-showon' : '');
   d.dataset.id = el.id;
@@ -84,6 +89,7 @@ export function render() {
 
   const scope = designScope();
   const ctx = designCtx();
+  setFormatLanguage(editLang());
   // header / footer of the template, shown faded on every page
   if (!state.band) {
     const t = state.template;
@@ -124,11 +130,19 @@ export function render() {
   }
   for (const el of page.elements) pageEl.appendChild(elementNode(el, scope, ctx));
   if (isBlankTemplate()) pageEl.appendChild(emptyState());
+  if (state.showMargins && !state.band) {
+    const m = pageMargins();
+    const mg = document.createElement('div');
+    mg.className = 'margin-guide';
+    mg.style.cssText = `left:${m.left}mm;top:${m.top}mm;right:${m.right}mm;bottom:${m.bottom}mm;border-width:${1 / state.zoom}px`;
+    pageEl.appendChild(mg);
+  }
   selLayer = document.createElement('div');
   selLayer.className = 'sel-layer';
   pageEl.appendChild(selLayer);
   wrap.appendChild(pageEl);
   scroll.appendChild(wrap);
+  setFormatLanguage('he');
   renderSelection();
   document.getElementById('status-errors').textContent = renderErrors.length ? `⚠ ${renderErrors.length} שגיאות בביטויים` : '';
   document.getElementById('status-errors').title = renderErrors.join('\n');
@@ -166,7 +180,7 @@ export function renderSelection() {
   const hs = 9 / state.zoom;
   for (const el of els) {
     const box = document.createElement('div');
-    box.className = 'sel-box' + (el.locked ? ' locked' : '');
+    box.className = 'sel-box' + (el.locked ? ' locked' : '') + (els.length > 1 && el === els[0] ? ' sel-first' : '');
     box.style.cssText = `left:${el.x}mm;top:${el.y}mm;width:${el.w}mm;height:${el.h}mm;border-width:${1.5 / state.zoom}px`;
     if (els.length === 1 && !el.locked) {
       for (const dir of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
@@ -200,6 +214,48 @@ function snap(v) {
   const g = state.grid;
   return g > 0 ? Math.round(v / g) * g : Math.round(v * 10) / 10;
 }
+
+// ---- smart guides: snap to page edges / margins / centre and to other elements
+function snapTargets(excludeIds) {
+  const { w, h } = canvasSizeMm();
+  const xs = [0, w / 2, w];
+  const ys = [0, h / 2, h];
+  if (!state.band) {
+    const m = pageMargins();
+    xs.push(m.left, w - m.right);
+    ys.push(m.top, h - m.bottom);
+  }
+  for (const o of currentPage().elements) {
+    if (excludeIds.has(o.id)) continue;
+    xs.push(o.x, o.x + o.w / 2, o.x + o.w);
+    ys.push(o.y, o.y + Math.max(o.h, 0) / 2, o.y + Math.max(o.h, 0));
+  }
+  return { xs, ys };
+}
+
+function nearest(edges, targets, tol) {
+  let best = null;
+  for (const e of edges) {
+    for (const t of targets) {
+      const d = t - e;
+      if (Math.abs(d) <= tol && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, t };
+    }
+  }
+  return best;
+}
+
+function showGuides(lines) {
+  selLayer.querySelectorAll('.guide').forEach((g) => g.remove());
+  for (const l of lines) {
+    const g = document.createElement('div');
+    g.className = `guide guide-${l.axis}`;
+    if (l.axis === 'x') Object.assign(g.style, { left: `${l.at}mm`, top: 0, bottom: 0, width: `${1 / state.zoom}px` });
+    else Object.assign(g.style, { top: `${l.at}mm`, left: 0, right: 0, height: `${1 / state.zoom}px` });
+    selLayer.appendChild(g);
+  }
+}
+
+const tolerance = () => 6 / (MM * state.zoom); // 6 screen pixels, in mm
 
 // ---------------------------------------------------------------- pointer
 let drag = null;
@@ -245,9 +301,25 @@ scroll.addEventListener('pointermove', (ev) => {
   if (drag.kind === 'move') {
     if (!drag.moved && Math.abs(dx) < 0.6 && Math.abs(dy) < 0.6) return;
     drag.moved = true;
+    // move the whole selection by one delta, snapped to guides (Alt = free move)
+    const bx = Math.min(...drag.els.map((e, i) => drag.origs[i].x));
+    const by = Math.min(...drag.els.map((e, i) => drag.origs[i].y));
+    const bw = Math.max(...drag.els.map((e, i) => drag.origs[i].x + e.w)) - bx;
+    const bh = Math.max(...drag.els.map((e, i) => drag.origs[i].y + Math.max(e.h, 0))) - by;
+    let ddx = snap(bx + dx) - bx;
+    let ddy = snap(by + dy) - by;
+    const lines = [];
+    if (state.smartGuides && !ev.altKey) {
+      drag.targets = drag.targets || snapTargets(new Set(drag.els.map((e) => e.id)));
+      const sx = nearest([bx + dx, bx + dx + bw / 2, bx + dx + bw], drag.targets.xs, tolerance());
+      const sy = nearest([by + dy, by + dy + bh / 2, by + dy + bh], drag.targets.ys, tolerance());
+      if (sx) { ddx = dx + sx.d; lines.push({ axis: 'x', at: sx.t }); }
+      if (sy) { ddy = dy + sy.d; lines.push({ axis: 'y', at: sy.t }); }
+    }
+    showGuides(lines);
     drag.els.forEach((e, i) => {
-      const nx = snap(drag.origs[i].x + dx);
-      const ny = snap(drag.origs[i].y + dy);
+      const nx = Math.round((drag.origs[i].x + ddx) * 100) / 100;
+      const ny = Math.round((drag.origs[i].y + ddy) * 100) / 100;
       drag.cur = drag.cur || [];
       drag.cur[i] = { x: nx, y: ny };
       const node = pageEl.querySelector(`.fd-el[data-id="${CSS.escape(e.id)}"]`);
@@ -263,10 +335,21 @@ scroll.addEventListener('pointermove', (ev) => {
     const o = drag.orig;
     let { x, y, w, h } = o;
     const d = drag.dir;
-    if (d.includes('e')) w = Math.max(1, snap(o.x + o.w + dx) - o.x);
-    if (d.includes('s')) h = Math.max(0.5, snap(o.y + o.h + dy) - o.y);
-    if (d.includes('w')) { const nx = Math.min(snap(o.x + dx), o.x + o.w - 1); w = o.x + o.w - nx; x = nx; }
-    if (d.includes('n')) { const ny = Math.min(snap(o.y + dy), o.y + o.h - 0.5); h = o.y + o.h - ny; y = ny; }
+    // the moving edge snaps to guides (Alt = free)
+    const lines = [];
+    const guide = (v, axis) => {
+      if (!state.smartGuides || ev.altKey) return snap(v);
+      drag.targets = drag.targets || snapTargets(new Set([o.id]));
+      const s = nearest([v], axis === 'x' ? drag.targets.xs : drag.targets.ys, tolerance());
+      if (!s) return snap(v);
+      lines.push({ axis, at: s.t });
+      return s.t;
+    };
+    if (d.includes('e')) w = Math.max(1, guide(o.x + o.w + dx, 'x') - o.x);
+    if (d.includes('s')) h = Math.max(0.5, guide(o.y + o.h + dy, 'y') - o.y);
+    if (d.includes('w')) { const nx = Math.min(guide(o.x + dx, 'x'), o.x + o.w - 1); w = o.x + o.w - nx; x = nx; }
+    if (d.includes('n')) { const ny = Math.min(guide(o.y + dy, 'y'), o.y + o.h - 0.5); h = o.y + o.h - ny; y = ny; }
+    showGuides(lines);
     if (ev.shiftKey && o.w && o.h) { const r = o.w / o.h; if (d.length === 2) h = w / r; }
     drag.cur = { x, y, w, h };
     const node = pageEl.querySelector(`.fd-el[data-id="${CSS.escape(o.id)}"]`);
@@ -288,6 +371,7 @@ function endDrag() {
   const d = drag;
   drag = null;
   if (!d) return;
+  if (selLayer) selLayer.querySelectorAll('.guide').forEach((g) => g.remove());
   if (d.kind === 'move' && d.moved && d.cur) {
     change(() => d.els.forEach((e, i) => { e.x = d.cur[i].x; e.y = d.cur[i].y; }));
   } else if (d.kind === 'resize' && d.cur) {
@@ -326,7 +410,8 @@ scroll.addEventListener('dblclick', (ev) => {
 function inlineTextEdit(el, node) {
   const ta = document.createElement('textarea');
   ta.className = 'inline-editor';
-  ta.value = el.text || '';
+  ta.value = getText(el, 'text') || '';
+  if (!ta.value && editLang() !== baseLanguage(state.template)) ta.placeholder = el.text || '';
   ta.dir = el.style?.direction || 'rtl';
   ta.style.cssText = node.style.cssText + ';position:absolute;z-index:50;resize:none;outline:2px solid #2563eb;background:#fffef5;padding:0.5mm;margin:0;box-sizing:border-box;overflow:auto';
   ta.style.display = 'block';
@@ -339,7 +424,7 @@ function inlineTextEdit(el, node) {
     done = true;
     const v = ta.value;
     ta.remove();
-    if (save && v !== el.text) change(() => { el.text = v; });
+    if (save && v !== (getText(el, 'text') || '')) change(() => setText(el, 'text', v));
     else render();
   };
   ta.addEventListener('blur', () => finish(true));

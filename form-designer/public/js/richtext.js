@@ -1,5 +1,5 @@
 // Word-like inline editor for rich text elements (double click to edit).
-import { state, change, emit } from './state.js';
+import { state, change, emit, getText, setText } from './state.js';
 import { escapeHtml } from '/shared/elements.js';
 import { allValuePaths } from './datatree.js';
 import { sanitizeRichHtml } from './sanitize.js';
@@ -43,7 +43,7 @@ function toolbarHtml() {
 
 export function startRichEdit(el, node) {
   if (editing) return;
-  node.innerHTML = sanitizeRichHtml(el.html) || '<p><br></p>';
+  node.innerHTML = sanitizeRichHtml(getText(el, 'html') || (el.tr ? el.html : '') || el.html) || '<p><br></p>';
   node.contentEditable = 'true';
   node.classList.add('rt-editing');
   node.style.overflow = 'auto';
@@ -150,7 +150,7 @@ export function startRichEdit(el, node) {
     bar.remove();
     const html = sanitizeRichHtml(cleanHtml(node.innerHTML));
     node.contentEditable = 'false';
-    if (save && html !== el.html) change(() => { el.html = html; });
+    if (save && html !== getText(el, 'html')) change(() => setText(el, 'html', html));
     else emit('all');
   }
   editing = { el, finish };

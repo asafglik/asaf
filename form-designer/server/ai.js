@@ -44,6 +44,7 @@ Types:
 - rect / ellipse: { fill, borderWidth, borderColor, radius }
 Formats: number:2, plain:0, currency, currency:USD, percent:1, date:dd/MM/yyyy, date:d MMMM yyyy, datetime, upper, bool:כן/לא
 Expressions: paths, + - * / %, == != < > <= >=, and/or/not, cond ? a : b, & (concat), functions sum/avg/min/max/count(list, itemExpr), round, if, coalesce, isEmpty, today, addDays, upper, len, join, format.
+Translations: element.tr = { en: { text: "..." } } (also html / label / prefix / suffix / emptyText, and column.tr = { en: { header, footer } }). template.languages lists the print languages; $lang is the print language in expressions.
 visibleIf: an expression; the element prints only when it is true (e.g. "customer.vip == true", "!isEmpty(notes)").
 showOn: all | first | last | notFirst | notLast (relative to the pages a long table produces).
 Header / footer bands repeat on every page: set with set_header / set_footer ({ enabled, height, showOn: all|notFirst|firstOnly|notLast|lastOnly }); their elements are added with target "header"/"footer" and use coordinates relative to the band (y = 0 is the top of the band).
@@ -227,6 +228,42 @@ REQUEST: ${request}`,
   });
   try {
     return await callClaude(content, { effort: 'medium' });
+  } catch (e) {
+    throw wrapApiError(e);
+  }
+}
+
+// ---------------------------------------------------------------- translation
+const TRANSLATE_SCHEMA = {
+  type: 'object',
+  properties: { translations: { type: 'array', items: { type: 'string' } } },
+  required: ['translations'],
+  additionalProperties: false,
+};
+
+const LANG_NAMES = { he: 'Hebrew', en: 'English', ar: 'Arabic', ru: 'Russian', fr: 'French', am: 'Amharic' };
+
+/** Translate form texts. Placeholders {{...}} and HTML tags are kept as they are. */
+export async function translateTexts({ from = 'he', to, texts = [] }) {
+  if (!aiAvailable()) throw Object.assign(new Error('התרגום האוטומטי משתמש בסוכן החכם: יש להגדיר ANTHROPIC_API_KEY בשרת'), { status: 501 });
+  if (!LANG_NAMES[to] || !Array.isArray(texts)) throw Object.assign(new Error('שפת יעד לא נתמכת'), { status: 400 });
+  if (!texts.length) return { translations: [] };
+  const list = texts.slice(0, 400).map((t) => String(t).slice(0, 4000));
+  try {
+    const stream = getClient().beta.messages.stream({
+      model: config.aiModel,
+      max_tokens: 64000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: TRANSLATE_SCHEMA } },
+      system: 'You translate the texts of printed business forms (invoices, contracts, delivery forms). Keep every {{...}} placeholder, HTML tag and attribute exactly as it is, translate only the human-readable text, use the formal business register of the target language, and keep numbers, codes and product names unchanged. Return the translations in the same order and count as the input.',
+      messages: [{ role: 'user', content: `Translate from ${LANG_NAMES[from] || from} to ${LANG_NAMES[to]}. Input (JSON array of ${list.length} strings):\n${JSON.stringify(list)}` }],
+    });
+    const msg = await stream.finalMessage();
+    if (msg.stop_reason === 'refusal') throw Object.assign(new Error('הסוכן סירב לתרגם'), { status: 422 });
+    const out = JSON.parse(msg.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
+    const tr = Array.isArray(out.translations) ? out.translations.map(String) : [];
+    return { translations: list.map((_, i) => tr[i] ?? '') };
   } catch (e) {
     throw wrapApiError(e);
   }

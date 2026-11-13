@@ -30,7 +30,18 @@ export const FORMAT_PRESETS = [
   { value: 'lower', label: 'אותיות קטנות' },
 ];
 
-const LOCALE = 'he-IL';
+// print language (set while a document is rendered in that language)
+const LOCALES = { he: 'he-IL', en: 'en-GB', ar: 'ar-IL-u-nu-latn', ru: 'ru-RU', fr: 'fr-FR', am: 'am-ET' };
+const YES_NO = { he: ['כן', 'לא'], en: ['Yes', 'No'], ar: ['نعم', 'لا'], ru: ['Да', 'Нет'], fr: ['Oui', 'Non'], am: ['አዎ', 'አይ'] };
+let LANG = 'he';
+let LOCALE = 'he-IL';
+export function setFormatLanguage(lang) {
+  LANG = LOCALES[lang] ? lang : 'he';
+  LOCALE = LOCALES[LANG];
+}
+export function formatLanguage() {
+  return LANG;
+}
 
 export function toNumber(v) {
   if (typeof v === 'number') return v;
@@ -140,10 +151,10 @@ export function formatDate(d, pattern = 'dd/MM/yyyy') {
   const map = {
     yyyy: d.getFullYear(),
     yy: pad(d.getFullYear() % 100),
-    MMMM: HEB_MONTHS[d.getMonth()],
+    MMMM: LANG === 'he' ? HEB_MONTHS[d.getMonth()] : new Intl.DateTimeFormat(LOCALE, { month: 'long' }).format(d),
     MM: pad(d.getMonth() + 1),
     M: d.getMonth() + 1,
-    dddd: 'יום ' + HEB_DAYS[d.getDay()],
+    dddd: LANG === 'he' ? 'יום ' + HEB_DAYS[d.getDay()] : new Intl.DateTimeFormat(LOCALE, { weekday: 'long' }).format(d),
     dd: pad(d.getDate()),
     d: d.getDate(),
     HH: pad(d.getHours()),
@@ -232,7 +243,7 @@ function formatValueUnsafe(value, spec) {
     case 'trim':
       return valueToString(value).trim();
     case 'bool': {
-      const [yes = 'כן', no = 'לא'] = rest ? rest.split('/') : [];
+      const [yes = YES_NO[LANG][0], no = YES_NO[LANG][1]] = rest ? rest.split('/') : [];
       const v = value === true || value === 1 || ['true', '1', 'y', 'yes', 'כן', 'x', 'v', '✓'].includes(String(value).trim().toLowerCase());
       return v ? yes : no;
     }

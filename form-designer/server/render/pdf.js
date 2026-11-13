@@ -201,11 +201,11 @@ async function mergeBackgrounds(template, overlayBytes, map, width, height) {
  * Render a template with data (object, or XML/JSON text) to a PDF buffer.
  * Returns { pdf, errors, pages }.
  */
-export async function renderPdf(template, data, { format } = {}) {
+export async function renderPdf(template, data, { format, lang } = {}) {
   const obj = typeof data === 'string' || Buffer.isBuffer(data)
-    ? parseData(String(data), { format, arrays: template.schema?.arrays || [] })
+    ? parseData(data, { format, arrays: template.schema?.arrays || [] })
     : data || {};
-  const { html, errors, width, height } = buildDocumentHtml(template, obj);
+  const { html, errors, width, height } = buildDocumentHtml(template, obj, { lang });
   const { pdf, map, placeholders: phMm, warnings } = await htmlToPdf(html, width, height);
   errors.push(...warnings);
   // positions in mm (top-left origin) and in PDF points (bottom-left origin)

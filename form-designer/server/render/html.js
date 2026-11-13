@@ -3,6 +3,8 @@
 import { elementHtml, BASE_CSS, PAGE_SIZES, escapeHtml, bandElements } from '../../shared/elements.js';
 import { scopeFor } from '../../shared/expr.js';
 import { sanitizeTemplate } from '../sanitize.js';
+import { localizeTemplate, baseLanguage, langDir, LANGUAGES } from '../../shared/i18n.js';
+import { setFormatLanguage } from '../../shared/format.js';
 import { barcodeSvg } from '../barcode.js';
 import { fontsCssForTemplate } from '../fonts.js';
 
@@ -17,12 +19,25 @@ export function pageSize(template) {
   return { width: w, height: h };
 }
 
-export function buildDocumentHtml(template, data, { fontsCss } = {}) {
-  template = sanitizeTemplate(template);
+export function buildDocumentHtml(template, data, { fontsCss, lang } = {}) {
+  const base = baseLanguage(template);
+  lang = lang && LANGUAGES[lang] ? lang : base;
+  const clean = sanitizeTemplate(template);
+  template = localizeTemplate(clean, lang, { pageWidth: pageSize(clean).width });
+  setFormatLanguage(lang);
+  try {
+    return buildLocalized(template, data, { fontsCss, lang });
+  } finally {
+    setFormatLanguage('he');
+  }
+}
+
+function buildLocalized(template, data, { fontsCss, lang }) {
   const { width, height } = pageSize(template);
   const errors = [];
   const ctx = { design: false, errors, barcode: barcodeSvg };
-  const scope = scopeFor(data);
+  // $lang: the print language, for conditions such as $lang == "en"
+  const scope = scopeFor(data && typeof data === 'object' && !Array.isArray(data) ? { ...data, $lang: lang } : data);
   const bands = bandElements(template, height);
   const pages = (template.pages || []).map((pg, i) => {
     const bg = pg.background || null;
@@ -42,7 +57,7 @@ export function buildDocumentHtml(template, data, { fontsCss } = {}) {
     return `<section class="fd-page" data-tpl-page="${i}" style="${style}">${bgHtml}${els}</section>`;
   });
   const css = fontsCss ?? fontsCssForTemplate(template);
-  const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+  const html = `<!doctype html><html lang="${lang}" dir="${langDir(lang)}"><head><meta charset="utf-8">
 <style>${css}</style>
 <style>
 @page{size:${width}mm ${height}mm;margin:0}

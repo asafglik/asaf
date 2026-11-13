@@ -42,12 +42,15 @@
       <button class="tb icon" data-action="zoom-in" title="הגדלה">+</button>
     </div>
 
+    <select id="lang-select" class="lang-select" title="שפת העריכה והתצוגה (ריבוי שפות)" aria-label="שפה" hidden></select>
+
     <label class="tb-toggle" title="הצגת ערכים מנתוני הדוגמה על גבי התבנית">
-      <input type="checkbox" id="show-data" checked> נתוני דוגמה
+      <input type="checkbox" id="show-data" checked> <span class="wide-only">נתוני </span>דוגמה
     </label>
 
     <div class="spacer"></div>
 
+    <button class="tb tour-btn" id="tour-btn" type="button" title="הדרכה על המערכת">? הדרכה</button>
     <button class="tb primary" data-action="preview" title="הפקת PDF עם נתוני הדוגמה">תצוגה מקדימה PDF</button>
     <div class="menu">
       <button class="tb icon" data-action="menu" aria-haspopup="true" title="עוד">⋯</button>

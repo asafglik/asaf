@@ -1,6 +1,33 @@
 // Designer state, undo/redo history and change notifications.
 import { PAGE_SIZES } from '/shared/elements.js';
 import { sanitizeTemplateHtml } from './sanitize.js';
+import { baseLanguage, TRANSLATABLE, COL_TRANSLATABLE } from '/shared/i18n.js';
+
+/** The language being edited, and whether it is a translation (not the default language). */
+export function editLang() {
+  return state.lang || baseLanguage(state.template);
+}
+export function isTranslating() {
+  return !!state.template && editLang() !== baseLanguage(state.template);
+}
+const TKEYS = new Set([...TRANSLATABLE, ...COL_TRANSLATABLE]);
+export const isTranslatable = (key) => TKEYS.has(key);
+
+/** Text of obj[key] in the language being edited ('' when not translated yet). */
+export function getText(obj, key) {
+  if (!isTranslating() || !isTranslatable(key)) return obj?.[key];
+  return obj?.tr?.[editLang()]?.[key] ?? '';
+}
+
+/** Set obj[key] in the language being edited (call inside change()). */
+export function setText(obj, key, v) {
+  if (!isTranslating() || !isTranslatable(key)) { obj[key] = v; return; }
+  const l = editLang();
+  obj.tr = obj.tr || {};
+  obj.tr[l] = { ...(obj.tr[l] || {}) };
+  if (v === '' || v === undefined) delete obj.tr[l][key];
+  else obj.tr[l][key] = v;
+}
 
 const listeners = new Set();
 
@@ -13,6 +40,10 @@ export const state = {
   zoom: 1,
   grid: 1, // snap step in mm (0 = off)
   showGrid: true,
+  smartGuides: true, // snap to other elements, margins and the page centre
+  showMargins: true,
+  alignTo: 'selection', // selection | first | page
+  lang: null, // language being edited (null = the template's default language)
   showData: true,
   data: {},
   tree: null,
@@ -103,6 +134,12 @@ export function canvasSizeMm() {
   return { w, h };
 }
 
+export function pageMargins(t = state.template) {
+  const m = t.page?.margins || {};
+  const v = (k) => (Number.isFinite(Number(m[k])) ? Number(m[k]) : 12);
+  return { top: v('top'), right: v('right'), bottom: v('bottom'), left: v('left') };
+}
+
 export function allContainers(t = state.template) {
   return [...t.pages, ...(t.header ? [t.header] : []), ...(t.footer ? [t.footer] : [])];
 }
@@ -172,6 +209,7 @@ export function loadTemplate(t) {
   state.template = copy;
   state.pageIndex = 0;
   state.band = null;
+  state.lang = null;
   state.selection = [];
   state.bgImages = {};
   state.dirty = false;
