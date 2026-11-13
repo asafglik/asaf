@@ -14,7 +14,9 @@ import { listFonts, fontsCssForWeb, resolveFontFile, saveUploadedFont, deleteUpl
 import { docxToHtml, officeToPdf, findSoffice } from './import.js';
 import { templatePlaceholders } from '../shared/elements.js';
 import { pageSize } from './render/html.js';
-import { autoDesign, designRequest, aiAvailable, translateTexts } from './ai.js';
+import { autoDesign, designRequest, aiAvailable, translateTexts, aiReview } from './ai.js';
+import { reviewPdf } from './review.js';
+import { parseData } from './data.js';
 import { sanitizeTemplate } from './sanitize.js';
 import { decodeBytes, charsetOf } from '../shared/encoding.js';
 
@@ -228,6 +230,33 @@ if (full) {
 
   // ---- smart design agent
   app.get('/api/ai/status', (req, res) => res.json({ available: aiAvailable(), model: aiAvailable() ? config.aiModel : null }));
+  // design review of a sample PDF + mapping of its values to the data world
+  app.post('/api/ai/review', asyncH(async (req, res) => {
+    const { pages = [], data, template, tree, useAi = true } = req.body || {};
+    if (!Array.isArray(pages) || !pages.length) return res.status(400).json({ error: 'חסר ניתוח של קובץ ה-PDF' });
+    const obj = data && typeof data === 'object' ? data
+      : template?.schema?.sample ? parseData(template.schema.sample, { arrays: template.schema.arrays || [] }) : {};
+    const report = reviewPdf({ pages, data: obj });
+    report.ai = null;
+    if (useAi && aiAvailable()) {
+      try {
+        report.ai = await aiReview({ pages, tree, report });
+      } catch (e) {
+        report.aiError = e.message;
+      }
+      // the agent's corrections of field mappings
+      for (const fx of report.ai?.mapping_fixes || []) {
+        const m = report.mappings.find((x) => x.page === fx.page && x.value === fx.value);
+        if (m && fx.path && fx.path !== m.path) {
+          m.alternatives = [m.path, ...m.alternatives.filter((a) => a !== fx.path)];
+          m.path = fx.path;
+          m.fixedByAgent = true;
+          for (const op of report.operations) if (op.element?.type === 'field' && op.element.binding === m.alternatives[0] && op.page === m.page && Math.abs(op.element.y - (m.y - 0.3)) < 0.6) op.element.binding = fx.path;
+        }
+      }
+    }
+    res.json(report);
+  }));
   app.post('/api/ai/translate', asyncH(async (req, res) => {
     res.json(await translateTexts(req.body || {}));
   }));

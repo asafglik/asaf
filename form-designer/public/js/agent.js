@@ -9,6 +9,7 @@ import { escapeHtml } from '/shared/elements.js';
 import { pickFile } from './props.js';
 import { sanitizeRichHtml } from './sanitize.js';
 import { cleanElement } from '/shared/elements.js';
+import { reviewFile, showReview, lastReview, rebuildOps, overlayOps, preparePages } from './review.js';
 
 const pane = document.getElementById('agent-pane');
 let status = { available: false };
@@ -29,6 +30,15 @@ function render() {
     ${status.available
     ? '<div class="ag-status on"><span class="dot"></span>הסוכן החכם פעיל</div>'
     : '<div class="ag-off"><b>הסוכן החכם עדיין לא הופעל בשרת.</b><br>בינתיים "עיצוב אוטומטי" משתמש בזיהוי בסיסי (שדות טופס ותוויות). להפעלה מלאה פנו למנהל המערכת (הגדרת מפתח Claude API – ראו README).</div>'}
+    <section class="ag-card ag-review">
+      <h3>חוות דעת על טופס קיים</h3>
+      <p class="hint">מעלים PDF שהמערכת הנוכחית הפיקה מאותו עולם נתונים. הסוכן נותן ציון וחוות דעת עיצובית, מזהה לבד איזה שדה מעולם הנתונים מופיע ליד כל טקסט, ומציע טבלאות.</p>
+      <div class="btn-row">
+        <button class="btn btn-primary" data-ag="review" type="button"${busy ? ' disabled' : ''}>📋 העלאת PDF לחוות דעת</button>
+        ${lastReview() ? `<button class="btn" data-ag="review-again" type="button">הדוח האחרון (${Number(lastReview().report.ai?.score ?? lastReview().report.score).toFixed(1)}/10)</button>` : ''}
+      </div>
+      ${!state.tree ? '<p class="hint warn">כדי לזהות שדות צריך קודם לטעון את עולם הנתונים (אותה רשומה שממנה הופק ה-PDF).</p>' : ''}
+    </section>
     <section class="ag-card">
       <h3>עיצוב אוטומטי מקובץ דוגמה</h3>
       <p class="hint">הסוכן קורא את ה-PDF (תמונה, טקסטים ושדות טופס קיימים) ואת עולם הנתונים, וממקם לבד שדות, טבלאות, תיבות סימון ואזורי חתימה.</p>
@@ -166,6 +176,65 @@ export function applyOperations(ops, { rebuild = false } = {}) {
 }
 
 // ---------------------------------------------------------------- actions
+// ---------------------------------------------------------------- design review of a sample PDF
+async function startReview() {
+  if (busy) return;
+  const f = await pickFile('application/pdf,.pdf');
+  if (!f) return;
+  busy = true;
+  chat.push({ role: 'user', text: `חוות דעת על ${f.name}` });
+  render();
+  try {
+    const r = await reviewFile(f, { aiAvailable: status.available });
+    const score = r.report.ai?.score ?? r.report.score;
+    chat.push({ role: 'agent', text: `ציון ${Number(score).toFixed(1)}/10 · ${r.report.stats.matchedValues} ערכים זוהו בעולם הנתונים · ${new Set(r.report.tables.map((t) => t.arrayPath)).size} טבלאות · ${r.report.issues.length + (r.report.ai?.issues?.length || 0)} הערות לשיפור.` });
+    openReview(r);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+function openReview(r) {
+  showReview(r, {
+    aiAvailable: status.available,
+    onAction: (action, choices) => runReviewAction(r, action, choices).catch((e) => { chat.push({ role: 'error', text: e.message }); render(); }),
+  });
+}
+
+async function runReviewAction(r, action, choices) {
+  const { report, b64, info } = r;
+  if (action === 'rebuild') {
+    preparePages(info, b64, { withBackground: false });
+    const n = applyOperations(rebuildOps(report, choices), { rebuild: true });
+    select([]);
+    // pages left without content (e.g. a table that only continued there) are dropped
+    change((t) => { if (t.pages.length > 1) t.pages = t.pages.filter((p, i) => i === 0 || p.elements.length > 0); });
+    chat.push({ role: 'agent', text: `הטופס נבנה מחדש כתבנית: טקסטים, קווים, ${choices.filter((c) => c.on).length} שדות מקושרים לעולם הנתונים ו-${new Set(report.tables.map((t) => t.arrayPath)).size} טבלאות עם מעבר עמודים. עכשיו אפשר לשפר את העיצוב (למשל לבקש מהסוכן) ולהפיק תצוגה מקדימה.`, applied: n, undoable: n > 0, depth: undoDepth() });
+  } else if (action === 'overlay') {
+    preparePages(info, b64, { withBackground: true });
+    const n = applyOperations(overlayOps(report, choices));
+    chat.push({ role: 'agent', text: `ה-PDF נשאר רקע, ו-${choices.filter((c) => c.on).length} שדות הונחו מעל הערכים שהודפסו (עם רקע לבן שמכסה אותם).`, applied: n, undoable: n > 0, depth: undoDepth() });
+  } else if (action === 'ai-rebuild') {
+    preparePages(info, b64, { withBackground: true });
+    state.agentMode = 'rebuild';
+    const ai = report.ai || {};
+    state.agentInstr = [
+      'Improve the design according to this review, do not copy its weaknesses.',
+      ai.summary || '',
+      ...(ai.quick_wins || []).map((w) => `- ${w}`),
+      ...report.issues.map((i) => `- ${i.title}: ${i.recommendation}`),
+      'Field mapping (printed value -> data path, use exactly these paths):',
+      ...choices.filter((c) => c.on).map((c) => `- page ${c.page} "${c.label}" = ${c.path}`),
+      'Lists to show as paginating tables:',
+      ...[...new Map(report.tables.map((t) => [t.arrayPath, t])).values()].map((t) => `- ${t.arrayPath}: ${t.columns.map((c) => `${c.header}=${c.rel}`).join(', ')}`),
+    ].join('\n');
+    await autoDesign();
+    return;
+  }
+  render();
+}
+
 async function autoDesign() {
   if (busy || !state.sourcePdf) return;
   const mode = state.agentMode === 'rebuild' ? 'rebuild' : 'overlay';
@@ -250,6 +319,8 @@ pane.addEventListener('click', (ev) => {
   else if (b.dataset.ag === 'auto') autoDesign();
   else if (b.dataset.ag === 'upload') uploadAndDesign().catch((e) => { chat.push({ role: 'error', text: e.message }); render(); });
   else if (b.dataset.ag === 'send') sendRequest(document.getElementById('ag-req').value);
+  else if (b.dataset.ag === 'review') startReview().catch((e) => { busy = false; chat.push({ role: 'error', text: e.message }); render(); });
+  else if (b.dataset.ag === 'review-again' && lastReview()) openReview(lastReview());
   else if (b.dataset.sugg) { const ta = document.getElementById('ag-req'); ta.value = b.dataset.sugg; ta.focus(); }
   else if (b.dataset.undo !== undefined) {
     const m = chat[+b.dataset.undo];
