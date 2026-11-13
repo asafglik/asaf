@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ניהול תבניות</title>
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/css/designer.css">
+  <link rel="stylesheet" href="/css/manage.css">
+</head>
+<body class="manage">
+  <header class="topbar">
+    <a class="brand" href="/"><span class="logo">▤</span><span>מעצב טפסים</span></a>
+    <nav class="mtabs" role="tablist">
+      <button class="mtab on" data-view="templates" role="tab">תבניות</button>
+      <button class="mtab" data-view="customers" role="tab">לקוחות</button>
+      <a class="mtab" href="/repo.html">מאגר התבניות</a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="muted" id="server-info"></span>
+    <span class="who" id="who" hidden></span>
+    <button class="tb tour-btn" id="tour-btn" type="button" title="הדרכה על המערכת">? הדרכה</button>
+  </header>
+
+  <main class="mwrap">
+    <section class="view on" data-view="templates">
+      <div class="mhead">
+        <div>
+          <h1>תבניות</h1>
+          <p class="muted" id="tpl-count"></p>
+        </div>
+        <div class="btn-row">
+          <button class="btn" data-act="import-json">ייבוא תבנית (JSON)</button>
+          <a class="btn btn-primary" href="/designer.html#new">+ תבנית חדשה</a>
+        </div>
+      </div>
+      <div class="mfilters">
+        <input type="search" id="tpl-search" class="input-lg" placeholder="חיפוש לפי מספר, שם או תיאור...">
+        <select id="tpl-customer" class="input-lg"><option value="">כל הלקוחות</option></select>
+      </div>
+      <div class="mtable-wrap">
+        <table class="mtable" id="tpl-table">
+          <thead><tr><th>מספר</th><th>שם התבנית</th><th>לקוחות</th><th>עמודים</th><th title="מספר אזורי החתימה והעלאת התמונה">חתימות ותמונות</th><th>עודכן</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty-hint" id="tpl-noresults" hidden>לא נמצאו תבניות שמתאימות לחיפוש. <button class="link" onclick="document.getElementById('tpl-search').value='';document.getElementById('tpl-customer').value='';document.getElementById('tpl-search').dispatchEvent(new Event('input'))">ניקוי החיפוש</button></div>
+        <div class="empty-hint" id="tpl-empty" hidden>אין עדיין תבניות. <a href="/designer.html#new">יצירת תבנית ראשונה</a></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="customers">
+      <div class="mhead">
+        <div>
+          <h1>לקוחות</h1>
+          <p class="muted">שיוך תבניות ללקוחות, מפתח API לכל לקוח וחבילת התקנה לשרת הלקוח.</p>
+        </div>
+        <button class="btn btn-primary" data-act="customer-new">+ לקוח חדש</button>
+      </div>
+      <div class="cust-grid" id="cust-grid"></div>
+    </section>
+  </main>
+
+  <dialog id="dlg" class="dlg">
+    <form method="dialog" class="dlg-inner">
+      <header class="dlg-head"><h2 id="dlg-title"></h2><button class="mini" value="cancel" aria-label="סגירה">✕</button></header>
+      <div class="dlg-body" id="dlg-body"></div>
+      <footer class="dlg-foot" id="dlg-foot"></footer>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/js/manage.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "name": "form-designer",
+  "version": "1.0.0",
+  "description": "מעצב טפסים ושרת הפקת PDF מתבניות ונתוני XML/JSON",
+  "type": "module",
+  "main": "server/index.js",
+  "bin": {
+    "form-render": "cli/render.js"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "start:render": "node server/index.js --mode=render",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@fontsource/alef": "^5.3.0",
+    "@fontsource/arimo": "^5.3.0",
+    "@fontsource/assistant": "^5.3.0",
+    "@fontsource/cousine": "^5.3.0",
+    "@fontsource/david-libre": "^5.3.0",
+    "@fontsource/frank-ruhl-libre": "^5.3.0",
+    "@fontsource/heebo": "^5.3.0",
+    "@fontsource/miriam-libre": "^5.3.0",
+    "@fontsource/noto-sans-hebrew": "^5.3.0",
+    "@fontsource/noto-serif-hebrew": "^5.3.0",
+    "@fontsource/rubik": "^5.3.0",
+    "@fontsource/secular-one": "^5.3.0",
+    "@fontsource/suez-one": "^5.3.0",
+    "@fontsource/tinos": "^5.3.0",
+    "@fontsource/varela-round": "^5.3.0",
+    "bwip-js": "^4.11.4",
+    "express": "^5.3.0",
+    "fast-xml-parser": "^5.12.0",
+    "mammoth": "^1.13.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438",
+    "puppeteer-core": "^25.17.0",
+    "sanitize-html": "^2.18.2"
+  }
+}

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>מאגר התבניות</title>
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/css/designer.css">
+  <link rel="stylesheet" href="/css/manage.css">
+</head>
+<body class="manage">
+  <header class="topbar">
+    <a class="brand" href="/"><span class="logo">▤</span><span>מעצב טפסים</span></a>
+    <nav class="mtabs">
+      <a class="mtab" href="/" id="nav-manage">תבניות</a>
+      <a class="mtab on" href="/repo.html">מאגר התבניות</a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="who" id="who"></span>
+  </header>
+
+  <main class="mwrap">
+    <div class="mhead">
+      <div>
+        <h1>מאגר התבניות</h1>
+        <p class="muted" id="repo-sub">התבניות שנבנו עבורכם, להורדה ולהתקנה בשרת ההפקה שלכם.</p>
+      </div>
+      <div class="btn-row">
+        <select id="repo-customer" class="input-lg" hidden></select>
+        <button class="btn btn-primary" id="repo-bundle" type="button">הורדת כל התבניות (חבילה)</button>
+      </div>
+    </div>
+    <div class="mtable-wrap">
+      <table class="mtable">
+        <thead><tr><th>מספר</th><th>שם התבנית</th><th>עמודים</th><th>שפות</th><th title="אזורי חתימה והעלאת תמונה">חתימות ותמונות</th><th>גרסה (עודכן)</th><th></th></tr></thead>
+        <tbody id="repo-body"></tbody>
+      </table>
+      <div class="empty-hint" id="repo-empty" hidden>עדיין אין תבניות במאגר.</div>
+    </div>
+
+    <section class="repo-help">
+      <h2>חיבור שרת ההפקה שלכם למאגר</h2>
+      <p>שרת הפקה (runtime) שמוגדר עם כתובת המאגר ומפתח ההפקה שלכם מוריד לבד כל תבנית חדשה או מעודכנת (בדיקה כל 5 דקות), ומסיר תבניות שהוסרו מהמאגר.</p>
+      <pre dir="ltr" id="repo-env"></pre>
+      <p>סנכרון ידני, או התקנה מקובץ חבילה שהורד מכאן:</p>
+      <pre dir="ltr" id="repo-cli"></pre>
+      <p>הפקת PDF בשרת שלכם:</p>
+      <pre dir="ltr" id="repo-curl"></pre>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/js/repo.js"></script>
+</body>
+</html>
